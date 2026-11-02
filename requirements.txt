@@ -1,0 +1,30 @@
+# SignFlow — серверная часть.
+#
+# Отличия от requirements.txt EDMS, из которого форкнут проект:
+#   * passlib удалён. Он читает стандартный модуль `crypt`, вырезанный из
+#     Python 3.13, поэтому на современных интерпретаторах не импортируется
+#     вообще. Хеширование пароля вызывает bcrypt напрямую — одна функция,
+#     никакого промежуточного слоя, и пин `bcrypt<4.1` больше не нужен.
+#   * python-jose заменён на PyJWT: jose не выпускался с 2021 года.
+#   * psycopg2 убран, остался только asyncpg — синхронный драйвер нужен
+#     исключительно Alembic, а тот работает через asyncpg в env.py.
+fastapi>=0.115
+uvicorn[standard]>=0.32
+sqlalchemy[asyncio]>=2.0.36
+asyncpg>=0.30
+alembic>=1.14
+pydantic>=2.9
+# EmailStr в схемах требует отдельной зависимости.
+email-validator>=2.2
+pydantic-settings>=2.6
+PyJWT>=2.10
+bcrypt>=4.2
+python-multipart>=0.0.18
+python-ulid>=3.0
+reportlab>=4.2
+
+# Тесты
+pytest>=8.3
+pytest-asyncio>=0.24
+httpx>=0.28
+aiosqlite>=0.20

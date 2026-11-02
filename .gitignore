@@ -1,0 +1,12 @@
+.env
+.env.autogen
+.venv/
+__pycache__/
+*.py[cod]
+
+# Локальная база, которую Alembic использует для autogenerate
+*.db
+
+storage/
+.pytest_cache/
+.ruff_cache/
