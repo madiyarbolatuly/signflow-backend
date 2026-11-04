@@ -47,6 +47,33 @@ async def _sheet_rows(session: AsyncSession, memo: Memo) -> list[dict]:
     ]
 
 
+async def labeled_body(session: AsyncSession, memo: Memo) -> list[dict]:
+    """
+    Поля записки с человеческими подписями из схемы шаблона.
+
+    Одна точка правды для PDF, карточки автора и страницы подписания: иначе
+    в документе поле называется «Программа обучения», а на экране — `program`.
+    Поля, которых нет в схеме (записка без шаблона или шаблон изменили после
+    отправки), показываются под своим ключом, а не скрываются.
+    """
+    schema = await _template_schema(session, memo)
+    labels = {
+        f.get("name"): f.get("label", f.get("name", ""))
+        for f in (schema or {}).get("fields", [])
+        if f.get("name")
+    }
+    order = list(labels.keys())
+
+    def rank(name: str) -> tuple[int, int]:
+        # Порядок полей задаёт шаблон; «лишние» уходят в конец.
+        return (0, order.index(name)) if name in order else (1, 0)
+
+    return [
+        {"name": name, "label": labels.get(name, name), "value": value}
+        for name, value in sorted((memo.body or {}).items(), key=lambda kv: rank(kv[0]))
+    ]
+
+
 async def build_memo_pdf(session: AsyncSession, memo: Memo) -> str:
     """
     Формирует PDF служебной записки и запоминает его хеш.

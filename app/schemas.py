@@ -115,8 +115,17 @@ class MemoOut(BaseModel):
     completed_at: datetime | None = None
 
 
+class BodyField(BaseModel):
+    """Поле записки вместе с подписью из схемы шаблона."""
+
+    name: str
+    label: str
+    value: object = None
+
+
 class MemoDetailOut(MemoOut):
     route: RouteOut | None = None
+    fields: list[BodyField] = Field(default_factory=list)
 
 
 class AttachmentOut(BaseModel):
@@ -154,6 +163,7 @@ class PublicMemoOut(BaseModel):
     signer_position: str | None = None
     expires_at: datetime | None = None
     attachments: list[PublicAttachmentOut] = Field(default_factory=list)
+    fields: list[BodyField] = Field(default_factory=list)
 
 
 # ─── администрирование ───────────────────────────────────────────────────────

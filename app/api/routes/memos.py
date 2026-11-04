@@ -86,7 +86,7 @@ async def submit_memo(
     session: SessionDep,
     user: CurrentUser,
     background: BackgroundTasks,
-) -> Memo:
+) -> dict:
     """Запускает маршрут согласования и рассылает задания первого уровня."""
     memo = await _get_own_memo(session, memo_id, user)
 
@@ -108,7 +108,7 @@ async def submit_memo(
     # событии, которое затем откатилось, хуже отсутствия письма.
     background.add_task(send_outbox, outbox, author_email=user.email)
 
-    return await _memo_detail(session, memo.id)
+    return await _detail_payload(session, await _memo_detail(session, memo.id))
 
 
 @router.post("/{memo_id}/recall", response_model=MemoOut)
@@ -173,8 +173,8 @@ async def _memo_detail(session, memo_id: int) -> Memo:
     return memo
 
 
-@router.get("/{memo_id}", response_model=MemoDetailOut)
-async def memo_detail(memo_id: int, session: SessionDep, user: CurrentUser) -> Memo:
+async def _authorized_memo(session, memo_id: int, user: User) -> Memo:
+    """Карточка записки с проверкой права её видеть."""
     memo = await _memo_detail(session, memo_id)
 
     # Видеть карточку вправе автор, администратор и любой участник маршрута.
@@ -200,6 +200,21 @@ async def memo_detail(memo_id: int, session: SessionDep, user: CurrentUser) -> M
     return memo
 
 
+async def _detail_payload(session, memo: Memo) -> dict:
+    """Ответ карточки: поля записки отдаются с подписями из шаблона."""
+    return {
+        **{c.name: getattr(memo, c.name) for c in Memo.__table__.columns},
+        "route": memo.route,
+        "fields": await documents.labeled_body(session, memo),
+    }
+
+
+@router.get("/{memo_id}", response_model=MemoDetailOut)
+async def memo_detail(memo_id: int, session: SessionDep, user: CurrentUser) -> dict:
+    memo = await _authorized_memo(session, memo_id, user)
+    return await _detail_payload(session, memo)
+
+
 @router.post("/steps/{step_id}/decide", response_model=MemoDetailOut)
 async def decide_step(
     step_id: int,
@@ -208,7 +223,7 @@ async def decide_step(
     user: CurrentUser,
     client: ClientInfo,
     background: BackgroundTasks,
-) -> Memo:
+) -> dict:
     """Решение изнутри системы, под своей учётной записью."""
     step = (
         await session.execute(select(ApprovalStep).where(ApprovalStep.id == step_id))
@@ -255,13 +270,13 @@ async def decide_step(
             select(ApprovalRoute).where(ApprovalRoute.id == group.route_id)
         )
     ).scalar_one()
-    return await _memo_detail(session, route.memo_id)
+    return await _detail_payload(session, await _memo_detail(session, route.memo_id))
 
 
 @router.get("/{memo_id}/pdf")
 async def memo_pdf(memo_id: int, session: SessionDep, user: CurrentUser) -> FileResponse:
     """Файл служебной записки. После завершения маршрута — с листом согласования."""
-    memo = await memo_detail(memo_id, session, user)
+    memo = await _authorized_memo(session, memo_id, user)
     if not memo.pdf_path:
         raise http_404("Файл ещё не сформирован: маршрут не запускался")
 
@@ -319,7 +334,7 @@ async def add_attachment(
 async def list_attachments(
     memo_id: int, session: SessionDep, user: CurrentUser
 ) -> list[Attachment]:
-    await memo_detail(memo_id, session, user)
+    await _authorized_memo(session, memo_id, user)
     rows = await session.execute(
         select(Attachment).where(Attachment.memo_id == memo_id).order_by(Attachment.id)
     )
@@ -330,7 +345,7 @@ async def list_attachments(
 async def download_attachment(
     memo_id: int, attachment_id: int, session: SessionDep, user: CurrentUser
 ) -> FileResponse:
-    await memo_detail(memo_id, session, user)
+    await _authorized_memo(session, memo_id, user)
     attachment = (
         await session.execute(
             select(Attachment)
