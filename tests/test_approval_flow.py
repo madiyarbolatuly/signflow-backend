@@ -384,9 +384,6 @@ async def test_audit_trail_records_every_decision(session, memo):
     assert decision.actor == "boss@example.com"
 
 
-@pytest.mark.skip(
-    reason="Испытание № 7 ТЗ: состязание на параллельном уровне проверяется "
-    "только на PostgreSQL — SQLite не поддерживает SELECT ... FOR UPDATE"
-)
-async def test_concurrent_decisions_activate_next_level_once():
-    ...
+# Испытание № 7 ТЗ (состязание на параллельном уровне) живёт в
+# tests/test_concurrency_pg.py: оно требует PostgreSQL, потому что
+# проверяет блокировку строки, которой в SQLite нет.
