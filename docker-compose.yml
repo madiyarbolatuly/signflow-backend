@@ -30,7 +30,10 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      # Публикуемый порт настраивается: 8000 бывает занят другим проектом,
+      # а на Windows его может держать резервирование winnat, при котором
+      # порт выглядит свободным в netstat, но Docker его не отдаёт.
+      - "${API_PORT:-8000}:8000"
     volumes:
       - storage:/srv/storage
     command: >
