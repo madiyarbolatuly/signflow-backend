@@ -3,15 +3,25 @@
 изнутри системы.
 """
 
-from fastapi import APIRouter, BackgroundTasks, status
+from fastapi import APIRouter, BackgroundTasks, File, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import ClientInfo, CurrentUser, SessionDep
 from app.core.exceptions import http_403, http_404, http_409
+from app.core.security import file_digest
 from app.db.enums import MemoStatus, SignMethod, StepStatus
-from app.db.tables import ApprovalGroup, ApprovalRoute, ApprovalStep, Memo, User
+from app.db.tables import (
+    ApprovalGroup,
+    ApprovalRoute,
+    ApprovalStep,
+    Attachment,
+    Memo,
+    User,
+)
 from app.schemas import (
+    AttachmentOut,
     DecisionRequest,
     MemoCreate,
     MemoDetailOut,
@@ -19,8 +29,11 @@ from app.schemas import (
     MemoUpdate,
     SubmitRequest,
 )
-from app.services import approval
+from app.services import approval, documents, storage
 from app.services.mail import send_outbox
+
+#: Предел размера вложения. Без него один запрос способен занять диск.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 router = APIRouter(tags=["Служебные записки"])
 
@@ -86,6 +99,10 @@ async def submit_memo(
     ]
     route = await approval.build_route(session, memo=memo, spec=spec)
     outbox = approval.collect_outbox(route)
+
+    # Файл и его хеш нужны до первой подписи: подпись сохраняет хеш того,
+    # что подписывали.
+    await documents.build_memo_pdf(session, memo)
 
     # Отправка после ответа и, что важнее, после фиксации транзакции: письмо о
     # событии, которое затем откатилось, хуже отсутствия письма.
@@ -225,6 +242,9 @@ async def decide_step(
 
     background.add_task(send_outbox, result.outbox, author_email=author_email)
 
+    if result.memo_status in (MemoStatus.approved, MemoStatus.rejected):
+        await documents.finalize_memo_pdf(session, result.memo_id)
+
     group = (
         await session.execute(
             select(ApprovalGroup).where(ApprovalGroup.id == step.group_id)
@@ -236,3 +256,93 @@ async def decide_step(
         )
     ).scalar_one()
     return await _memo_detail(session, route.memo_id)
+
+
+@router.get("/{memo_id}/pdf")
+async def memo_pdf(memo_id: int, session: SessionDep, user: CurrentUser) -> FileResponse:
+    """Файл служебной записки. После завершения маршрута — с листом согласования."""
+    memo = await memo_detail(memo_id, session, user)
+    if not memo.pdf_path:
+        raise http_404("Файл ещё не сформирован: маршрут не запускался")
+
+    path = storage.resolve_within_storage(memo.pdf_path)
+    if not path.is_file():
+        raise http_404("Файл отсутствует в хранилище")
+
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=f"sluzhebnaya-zapiska-{memo.number or memo.id}.pdf",
+    )
+
+
+@router.post(
+    "/{memo_id}/attachments",
+    response_model=AttachmentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_attachment(
+    memo_id: int,
+    session: SessionDep,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> Attachment:
+    memo = await _get_own_memo(session, memo_id, user)
+    if memo.status != MemoStatus.draft:
+        # После запуска маршрута состав вложений меняться не должен: иначе
+        # подписант согласует один комплект, а в деле окажется другой.
+        raise http_409("Прикреплять файлы можно только к черновику")
+
+    data = await file.read()
+    if not data:
+        raise http_409("Файл пуст")
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise http_409(
+            f"Файл больше допустимых {MAX_ATTACHMENT_BYTES // (1024 * 1024)} МБ"
+        )
+
+    name = storage.safe_file_name(file.filename or "file")
+    attachment = Attachment(
+        memo_id=memo.id,
+        file_name=name,
+        file_path=f"memos/{memo.id}/attachments/{name}",
+        size=len(data),
+        file_hash=file_digest(data),
+    )
+    storage.save_bytes(attachment.file_path, data)
+    session.add(attachment)
+    await session.flush()
+    return attachment
+
+
+@router.get("/{memo_id}/attachments", response_model=list[AttachmentOut])
+async def list_attachments(
+    memo_id: int, session: SessionDep, user: CurrentUser
+) -> list[Attachment]:
+    await memo_detail(memo_id, session, user)
+    rows = await session.execute(
+        select(Attachment).where(Attachment.memo_id == memo_id).order_by(Attachment.id)
+    )
+    return list(rows.scalars().all())
+
+
+@router.get("/{memo_id}/attachments/{attachment_id}")
+async def download_attachment(
+    memo_id: int, attachment_id: int, session: SessionDep, user: CurrentUser
+) -> FileResponse:
+    await memo_detail(memo_id, session, user)
+    attachment = (
+        await session.execute(
+            select(Attachment)
+            .where(Attachment.id == attachment_id)
+            .where(Attachment.memo_id == memo_id)
+        )
+    ).scalar_one_or_none()
+    if attachment is None:
+        raise http_404("Вложение не найдено")
+
+    path = storage.resolve_within_storage(attachment.file_path)
+    if not path.is_file():
+        raise http_404("Файл отсутствует в хранилище")
+
+    return FileResponse(path, filename=attachment.file_name)

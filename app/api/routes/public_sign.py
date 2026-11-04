@@ -12,13 +12,15 @@
 """
 
 from fastapi import APIRouter, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 
 from app.api.deps import ClientInfo, SessionDep
-from app.db.enums import SignMethod
-from app.db.tables import ApprovalGroup, ApprovalRoute, Memo, User
-from app.schemas import PublicDecisionRequest, PublicMemoOut
-from app.services import approval
+from app.core.exceptions import http_404
+from app.db.enums import MemoStatus, SignMethod
+from app.db.tables import ApprovalGroup, ApprovalRoute, Attachment, Memo, User
+from app.schemas import PublicAttachmentOut, PublicDecisionRequest, PublicMemoOut
+from app.services import approval, documents, storage
 from app.services.mail import send_outbox
 
 router = APIRouter(tags=["Подписание по ссылке"])
@@ -49,6 +51,12 @@ async def open_for_signing(token: str, session: SessionDep) -> PublicMemoOut:
     step = await approval.resolve_sign_token(session, token)
     memo, author = await _memo_for_step(session, step)
 
+    attachments = (
+        await session.execute(
+            select(Attachment).where(Attachment.memo_id == memo.id).order_by(Attachment.id)
+        )
+    ).scalars().all()
+
     return PublicMemoOut(
         number=memo.number,
         title=memo.title,
@@ -58,7 +66,43 @@ async def open_for_signing(token: str, session: SessionDep) -> PublicMemoOut:
         signer_name=step.signer_name,
         signer_position=step.signer_position,
         expires_at=step.token_expires_at,
+        attachments=[
+            PublicAttachmentOut(id=a.id, file_name=a.file_name, size=a.size)
+            for a in attachments
+        ],
     )
+
+
+@router.get("/sign/{token}/attachments/{attachment_id}")
+async def download_attachment_by_link(
+    token: str, attachment_id: int, session: SessionDep
+) -> FileResponse:
+    """
+    Вложение по той же ссылке подписания.
+
+    Токен проверяется заново, и вложение обязано принадлежать именно этой
+    записке: без второй проверки подмена идентификатора в адресе открыла бы
+    доступ к файлам чужих документов — та же ошибка, от которой защищается
+    `public_share.py` в EDMS.
+    """
+    step = await approval.resolve_sign_token(session, token)
+    memo, _author = await _memo_for_step(session, step)
+
+    attachment = (
+        await session.execute(
+            select(Attachment)
+            .where(Attachment.id == attachment_id)
+            .where(Attachment.memo_id == memo.id)
+        )
+    ).scalar_one_or_none()
+    if attachment is None:
+        raise http_404("Вложение не найдено")
+
+    path = storage.resolve_within_storage(attachment.file_path)
+    if not path.is_file():
+        raise http_404("Файл отсутствует в хранилище")
+
+    return FileResponse(path, filename=attachment.file_name)
 
 
 @router.post("/sign/{token}/decide")
@@ -85,6 +129,9 @@ async def decide_by_link(
         ip=client["ip"],
         user_agent=client["user_agent"],
     )
+
+    if result.memo_status in (MemoStatus.approved, MemoStatus.rejected):
+        await documents.finalize_memo_pdf(session, result.memo_id)
 
     background.add_task(send_outbox, result.outbox, author_email=author.email)
 

@@ -119,6 +119,23 @@ class MemoDetailOut(MemoOut):
     route: RouteOut | None = None
 
 
+class AttachmentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    file_name: str
+    size: int
+    file_hash: str | None = None
+
+
+class PublicAttachmentOut(BaseModel):
+    """Вложение в том виде, в каком его видит подписант по ссылке."""
+
+    id: int
+    file_name: str
+    size: int
+
+
 class PublicMemoOut(BaseModel):
     """
     Что видит подписант по ссылке.
@@ -136,6 +153,7 @@ class PublicMemoOut(BaseModel):
     signer_name: str | None = None
     signer_position: str | None = None
     expires_at: datetime | None = None
+    attachments: list[PublicAttachmentOut] = Field(default_factory=list)
 
 
 # ─── администрирование ───────────────────────────────────────────────────────

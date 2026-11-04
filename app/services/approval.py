@@ -68,6 +68,9 @@ class DecisionResult:
     step: ApprovalStep
     route_status: str
     memo_status: str
+    #: Нужен вызывающей стороне, чтобы дописать лист согласования, не
+    #: восстанавливая путь шаг → уровень → маршрут → записка заново.
+    memo_id: int = 0
     outbox: list[OutboxItem] = field(default_factory=list)
     #: Уровень, активированный этим решением. None — маршрут не продвинулся.
     activated_group_no: int | None = None
@@ -427,6 +430,7 @@ async def decide(
         step=step,
         route_status=route.status,
         memo_status=memo.status,
+        memo_id=memo.id,
         outbox=outbox,
         activated_group_no=activated,
     )

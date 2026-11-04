@@ -5,6 +5,11 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+# Шрифт с кириллицей. Встроенные в reportlab шрифты знают только Latin-1,
+# поэтому без этого пакета русский текст в PDF выходит набором точек.
+# Проверяется тестом test_cyrillic_font_is_available.
+RUN apt-get update     && apt-get install -y --no-install-recommends fonts-dejavu-core     && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /srv
 
 # Зависимости отдельным слоем: правка кода не должна вызывать повторную
