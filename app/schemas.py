@@ -189,6 +189,22 @@ class PublicMemoOut(BaseModel):
     fields: list[BodyField] = Field(default_factory=list)
 
 
+# ─── уведомления ─────────────────────────────────────────────────────────────
+class NotificationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    message: str
+    link: str | None = None
+    status: str
+    created_at: Moment
+
+
+class NotificationListOut(BaseModel):
+    unread: int
+    items: list[NotificationOut]
+
+
 # ─── администрирование ───────────────────────────────────────────────────────
 class DepartmentIn(BaseModel):
     name: str = Field(min_length=1, max_length=255)

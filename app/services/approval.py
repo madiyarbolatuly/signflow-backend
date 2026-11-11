@@ -431,6 +431,11 @@ async def decide(
     if not approve:
         _fail_route(session, route=route, memo=memo, failed_group=current, groups=groups)
         outbox.append(_author_letter(memo, approved=False, comment=step.comment))
+        _notify_author(
+            session,
+            memo,
+            f"Служебная записка «{memo.title}» отклонена: {step.comment}",
+        )
     else:
         if _group_satisfied(current):
             current.status = GroupStatus.satisfied
@@ -451,6 +456,9 @@ async def decide(
                 memo.status = MemoStatus.approved
                 memo.completed_at = route.completed_at
                 outbox.append(_author_letter(memo, approved=True))
+                _notify_author(
+                    session, memo, f"Служебная записка «{memo.title}» согласована"
+                )
                 session.add(
                     AuditLog(
                         entity_type="memo",
@@ -469,6 +477,19 @@ async def decide(
         memo_id=memo.id,
         outbox=outbox,
         activated_group_no=activated,
+    )
+
+
+def _notify_author(session: AsyncSession, memo: Memo, message: str) -> None:
+    """
+    Уведомление автору в интерфейсе.
+
+    Раньше уведомления получал только согласующий, а автор узнавал об исходе
+    из письма — которое при отключённой или сломанной почте не приходит
+    вовсе.
+    """
+    session.add(
+        Notification(user_id=memo.author_id, message=message, link=f"/memos/{memo.id}")
     )
 
 

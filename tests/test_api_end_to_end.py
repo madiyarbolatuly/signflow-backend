@@ -233,3 +233,68 @@ async def test_health_is_open(api):
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+# ─── уведомления ─────────────────────────────────────────────────────────────
+async def _login(client, email: str, password: str) -> dict:
+    resp = await client.post(
+        f"{PREFIX}/auth/login", json={"email": email, "password": password}
+    )
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+async def test_author_sees_the_outcome_in_notifications(api):
+    from sqlalchemy import select
+
+    client, maker = api
+    headers = await _login(client, "author@example.com", "verysecret123")
+
+    empty = await client.get(f"{PREFIX}/notifications", headers=headers)
+    assert empty.json() == {"unread": 0, "items": []}
+
+    created = await client.post(
+        f"{PREFIX}/memos", headers=headers, json={"title": "Отпуск", "body": {}}
+    )
+    memo_id = created.json()["id"]
+    await client.post(
+        f"{PREFIX}/memos/{memo_id}/submit",
+        headers=headers,
+        json={"route": [{"policy": "all", "signers": [{"email": "boss@example.com"}]}]},
+    )
+
+    async with maker() as s:
+        token = (await s.execute(select(ApprovalStep.action_token))).scalar_one()
+    await client.post(f"{PREFIX}/public/sign/{token}/decide", json={"approve": True})
+
+    listing = (await client.get(f"{PREFIX}/notifications", headers=headers)).json()
+    assert listing["unread"] == 1
+    item = listing["items"][0]
+    assert "согласована" in item["message"]
+    assert item["link"] == f"/memos/{memo_id}"
+    assert item["status"] == "unread"
+
+    # Чужое уведомление неотличимо от несуществующего.
+    async with maker() as s:
+        s.add(
+            User(
+                email="other@example.com",
+                full_name="Другой Сотрудник",
+                role=UserRole.author,
+                password_hash=hash_password("anothersecret1"),
+            )
+        )
+        await s.commit()
+    other = await _login(client, "other@example.com", "anothersecret1")
+    resp = await client.post(f"{PREFIX}/notifications/{item['id']}/read", headers=other)
+    assert resp.status_code == 404
+    still = (await client.get(f"{PREFIX}/notifications", headers=headers)).json()
+    assert still["unread"] == 1, "чужой запрос не должен отметить уведомление"
+
+    resp = await client.post(f"{PREFIX}/notifications/{item['id']}/read", headers=headers)
+    assert resp.status_code == 200
+    after = (await client.get(f"{PREFIX}/notifications", headers=headers)).json()
+    assert after["unread"] == 0
+    assert after["items"][0]["status"] == "read"
+
+    assert (await client.get(f"{PREFIX}/notifications")).status_code == 401
