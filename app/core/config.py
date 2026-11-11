@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     )
 
     # ─── приложение ──────────────────────────────────────────────────────────
-    title: str = "SignFlow"
+    title: str = "УчетЭДО"
     description: str = "Электронное согласование и подписание служебных записок"
     version: str = "1.0.0"
     api_prefix: str = "/v1"

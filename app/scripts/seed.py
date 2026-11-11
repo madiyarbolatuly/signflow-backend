@@ -197,7 +197,7 @@ async def seed(admin_email: str, admin_password: str | None) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Первичное наполнение SignFlow")
+    parser = argparse.ArgumentParser(description="Первичное наполнение УчетЭДО")
     parser.add_argument("--admin-email", default="admin@example.com")
     parser.add_argument(
         "--admin-password",

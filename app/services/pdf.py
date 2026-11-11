@@ -243,7 +243,7 @@ def _sheet_flowables(*, memo, rows: list[dict], st: dict) -> list:
     )
 
     note = Paragraph(
-        "Документ согласован в информационной системе SignFlow простой "
+        "Документ согласован в информационной системе УчетЭДО простой "
         "электронной подписью. Решения зафиксированы в журнале аудита "
         f"с указанием времени и сетевого адреса. Время указано в поясе {timezone_label()}. "
         "Хеш подписанного файла "
@@ -321,7 +321,7 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
             Paragraph(_text(document["date"]), right),
             [
                 Paragraph(_text(document["signer"]), right),
-                Paragraph("(подано через SignFlow)", caption),
+                Paragraph("(подано через УчетЭДО)", caption),
             ],
         ]],
         colWidths=[85 * mm, 85 * mm],
