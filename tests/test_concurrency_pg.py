@@ -256,3 +256,40 @@ async def test_concurrent_decisions_on_any_policy_close_the_level_once(maker, ga
 
         assert len(approved) == 1, "по политике «любой» подписывает ровно один"
         assert len(released) == 1
+
+
+async def test_concurrent_submissions_get_distinct_numbers(maker):
+    """
+    Десять записок отправляются одновременно, включая самую первую в году,
+    когда строки счётчика ещё нет. Номера обязаны быть разными и идти подряд.
+    """
+    async with maker() as session:
+        author = User(email="numbers@example.com", full_name="Автор", role="author")
+        session.add(author)
+        await session.flush()
+        ids = []
+        for i in range(10):
+            memo = Memo(author_id=author.id, title=f"Записка {i}", body={})
+            session.add(memo)
+            await session.flush()
+            ids.append(memo.id)
+        await session.commit()
+
+    async def submit(memo_id: int) -> str:
+        async with maker() as session:
+            memo = (
+                await session.execute(select(Memo).where(Memo.id == memo_id))
+            ).scalar_one()
+            await approval.build_route(
+                session,
+                memo=memo,
+                spec=[{"policy": GroupPolicy.all_of, "signers": [{"email": "b@example.com"}]}],
+            )
+            await session.commit()
+            return memo.number
+
+    numbers = await asyncio.gather(*(submit(i) for i in ids))
+
+    assert len(set(numbers)) == 10, f"номера повторились: {sorted(numbers)}"
+    tails = sorted(int(n.rsplit("-", 1)[1]) for n in numbers)
+    assert tails == list(range(1, 11)), "нумерация должна идти подряд, без пропусков"

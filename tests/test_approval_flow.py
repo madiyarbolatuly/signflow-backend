@@ -387,3 +387,33 @@ async def test_audit_trail_records_every_decision(session, memo):
 # Испытание № 7 ТЗ (состязание на параллельном уровне) живёт в
 # tests/test_concurrency_pg.py: оно требует PostgreSQL, потому что
 # проверяет блокировку строки, которой в SQLite нет.
+
+
+# ─── регистрационный номер ───────────────────────────────────────────────────
+async def test_numbers_are_short_and_sequential(session, author):
+    """Номер должен диктоваться по телефону: «СЗ-2026-0001», а не 26 символов."""
+    import re
+
+    from app.db.tables import Memo
+
+    numbers = []
+    for title in ("первая", "вторая", "третья"):
+        m = Memo(author_id=author.id, title=title, body={})
+        session.add(m)
+        await session.flush()
+        await approval.build_route(
+            session, memo=m, spec=[_level(GroupPolicy.all_of, "boss@example.com")]
+        )
+        numbers.append(m.number)
+
+    assert all(re.fullmatch(r"СЗ-\d{4}-\d{4}", n) for n in numbers), numbers
+    tails = [int(n.rsplit("-", 1)[1]) for n in numbers]
+    assert tails == [1, 2, 3], "нумерация сквозная и без пропусков"
+
+
+async def test_number_is_kept_when_memo_already_has_one(session, memo):
+    memo.number = "СЗ-2025-0777"
+    await approval.build_route(
+        session, memo=memo, spec=[_level(GroupPolicy.all_of, "boss@example.com")]
+    )
+    assert memo.number == "СЗ-2025-0777"

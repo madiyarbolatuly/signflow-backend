@@ -20,9 +20,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from ulid import ULID
 
 from app.core.config import settings
 from app.core.exceptions import http_400, http_403, http_409, http_410
@@ -43,6 +44,7 @@ from app.db.tables import (
     AuditLog,
     Memo,
     Notification,
+    NumberSequence,
     Signature,
     User,
 )
@@ -129,6 +131,39 @@ async def _load_groups(session: AsyncSession, route_id: int) -> list[ApprovalGro
         .order_by(ApprovalGroup.order_no)
     )
     return list((await session.execute(stmt)).scalars().all())
+
+
+# ─── нумерация ───────────────────────────────────────────────────────────────
+#: Префикс регистрационного номера: «служебная записка».
+NUMBER_PREFIX = "СЗ"
+
+
+async def next_number(session: AsyncSession) -> str:
+    """
+    Выдаёт очередной регистрационный номер вида «СЗ-2026-0042».
+
+    Нумерация сквозная в пределах года; год берётся по местному времени,
+    иначе записка, отправленная в ночь на 1 января, получила бы номер
+    прошлого года.
+
+    Строка счётчика сначала создаётся «если её нет», затем читается под
+    блокировкой. Одного чтения под блокировкой мало: первую записку года
+    могут отправлять двое одновременно, блокировать им ещё нечего, и оба
+    вставили бы строку — второй получил бы нарушение первичного ключа.
+    """
+    year = to_local(_now()).year
+    insert = pg_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+    await session.execute(
+        insert(NumberSequence).values(year=year, last_value=0).on_conflict_do_nothing()
+    )
+
+    stmt = select(NumberSequence).where(NumberSequence.year == year)
+    if _supports_row_locks(session):
+        stmt = stmt.with_for_update()
+    sequence = (await session.execute(stmt)).scalar_one()
+    sequence.last_value += 1
+    await session.flush()
+    return f"{NUMBER_PREFIX}-{year}-{sequence.last_value:04d}"
 
 
 # ─── построение маршрута ─────────────────────────────────────────────────────
@@ -221,7 +256,7 @@ async def build_route(
     memo.status = MemoStatus.submitted
     memo.submitted_at = _now()
     if memo.number is None:
-        memo.number = str(ULID())
+        memo.number = await next_number(session)
 
     outbox: list[OutboxItem] = []
     groups = await _load_groups(session, route.id)

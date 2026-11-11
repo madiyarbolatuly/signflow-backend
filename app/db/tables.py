@@ -112,7 +112,13 @@ class MemoTemplate(Base):
     body_schema: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     #: Маршрут по умолчанию. Автор вправе изменить его перед отправкой.
+    #: Подписанты задаются ролью («руководитель автора»), а не человеком —
+    #: в конкретных людей роли разворачивает `services/routing.py`.
     default_route: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+    #: Связный текст документа с подстановками `{имя_поля}`. Без него
+    #: записка печатается таблицей «показатель — значение».
+    text_template: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = created_at_column()
@@ -134,6 +140,14 @@ class Memo(Base):
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     body: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+    #: «Кому» в шапке документа. Свободный текст: должность и ФИО адресата.
+    addressee: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    #: Маршрут, который автор собрал для черновика. Настоящий маршрут
+    #: (`approval_routes`) создаётся только при отправке; до неё задуманное
+    #: негде было хранить, и при повторном открытии черновика маршрут терялся.
+    draft_route: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -266,6 +280,14 @@ class ApprovalStep(Base):
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     token_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    #: Когда задание выдано и когда о нём напоминали в последний раз — от
+    #: этих отметок считается срок очередного напоминания.
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reminders_sent: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
     created_at: Mapped[datetime] = created_at_column()
 
     group = relationship("ApprovalGroup", back_populates="steps")
@@ -307,6 +329,22 @@ class Signature(Base):
     step = relationship("ApprovalStep", back_populates="signature")
 
     __table_args__ = (_in("method", SignMethod.ALL),)
+
+
+# ─── нумерация ───────────────────────────────────────────────────────────────
+class NumberSequence(Base):
+    """
+    Счётчик регистрационных номеров, по строке на год.
+
+    Номер вида «СЗ-2026-0042» выдаётся под блокировкой этой строки: два
+    одновременных запуска маршрута не должны получить один номер, а
+    `max(number) + 1` по таблице записок именно это и допускает.
+    """
+
+    __tablename__ = "number_sequences"
+
+    year: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    last_value: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 # ─── системные таблицы ───────────────────────────────────────────────────────
