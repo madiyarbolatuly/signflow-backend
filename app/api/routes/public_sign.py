@@ -73,6 +73,7 @@ async def open_for_signing(token: str, session: SessionDep) -> PublicMemoOut:
             for a in attachments
         ],
         fields=await documents.labeled_body(session, memo),
+        document=await documents.memo_document(session, memo),
     )
 
 

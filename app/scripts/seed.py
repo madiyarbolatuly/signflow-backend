@@ -1,9 +1,12 @@
 """
-Первичное наполнение: администратор, подразделение и три шаблона служебных
-записок, требуемых ТЗ (п. 5.1.2).
+Первичное наполнение: администратор, подразделение и шаблоны заявлений.
 
-Идемпотентно: повторный запуск ничего не дублирует, поэтому сценарий
-безопасно вызывать при каждом развёртывании.
+Шаблоны повторяют бумажные бланки компании — заявления на приём, на
+трудовой отпуск и на увольнение: адресат, текст и состав полей взяты с них.
+
+Идемпотентно: повторный запуск ничего не дублирует, а изменения шаблонов
+дописывает в уже существующие, поэтому сценарий безопасно вызывать при
+каждом развёртывании.
 
     python -m app.scripts.seed --admin-email admin@example.com --admin-password ...
 
@@ -16,52 +19,130 @@ import asyncio
 import secrets
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
 from app.db.enums import UserRole
 from app.db.session import async_session
 from app.db.tables import Department, MemoTemplate, User
 
+#: Адресат с бланков компании. В каждой записке его можно поправить —
+#: например, для заявления в другое юрлицо группы.
+ADDRESSEE = [
+    "Генеральному директору",
+    "ТОО «Торговый дом «GQ-System Kazakhstan»",
+    "г-ну Құсайын Ж. А.",
+]
+
 TEMPLATES = [
     {
-        "code": "vacation",
-        "title": "Заявление на отпуск",
+        "code": "hiring",
+        "title": "Заявление на приём на работу",
         "body_schema": {
+            "doc_title": "Заявление",
+            "addressee": ADDRESSEE,
             "fields": [
-                {"name": "date_from", "label": "Дата начала", "type": "date", "required": True},
-                {"name": "date_to", "label": "Дата окончания", "type": "date", "required": True},
-                {"name": "kind", "label": "Вид отпуска", "type": "select",
-                 "options": ["Ежегодный оплачиваемый", "Без сохранения оплаты"], "required": True},
-                {"name": "reason", "label": "Основание", "type": "textarea", "required": False},
-            ]
+                {"name": "position", "label": "Должность", "type": "text", "required": True},
+                {"name": "start_date", "label": "Дата начала работы", "type": "date",
+                 "required": True},
+                # Поля шапки стоят на бланке под ФИО, а не в тексте заявления.
+                {"name": "registration_address", "label": "Адрес регистрации", "type": "text",
+                 "required": True, "placement": "header"},
+                {"name": "residence_address", "label": "Адрес проживания", "type": "text",
+                 "required": True, "placement": "header"},
+                {"name": "phone", "label": "Конт. тел", "type": "text",
+                 "required": True, "placement": "header"},
+            ],
         },
+        "text_template": (
+            "Прошу Вас принять меня на работу на должность {position} "
+            "с {start_date} года."
+        ),
     },
     {
-        "code": "training",
-        "title": "Направление на обучение",
+        "code": "annual_leave",
+        "title": "Заявление на трудовой отпуск",
         "body_schema": {
+            "doc_title": "Заявление",
+            "addressee": ADDRESSEE,
             "fields": [
-                {"name": "program", "label": "Программа обучения", "type": "text", "required": True},
-                {"name": "provider", "label": "Организатор", "type": "text", "required": True},
-                {"name": "date_from", "label": "Дата начала", "type": "date", "required": True},
-                {"name": "date_to", "label": "Дата окончания", "type": "date", "required": True},
-                {"name": "cost", "label": "Стоимость, тенге", "type": "number", "required": False},
-            ]
+                {"name": "date_from", "label": "Дата начала отпуска", "type": "date",
+                 "required": True},
+                {"name": "days", "label": "Количество календарных дней", "type": "number",
+                 "required": True},
+            ],
         },
+        "text_template": (
+            "Прошу Вас предоставить мне очередной трудовой отпуск с {date_from} года "
+            "сроком на {days:календарный день|календарных дня|календарных дней}."
+        ),
     },
     {
-        "code": "business_trip",
-        "title": "Направление в командировку",
+        "code": "dismissal",
+        "title": "Заявление на увольнение",
         "body_schema": {
+            "doc_title": "Заявление",
+            "addressee": ADDRESSEE,
             "fields": [
-                {"name": "destination", "label": "Пункт назначения", "type": "text", "required": True},
-                {"name": "purpose", "label": "Цель поездки", "type": "textarea", "required": True},
-                {"name": "date_from", "label": "Дата выезда", "type": "date", "required": True},
-                {"name": "date_to", "label": "Дата возвращения", "type": "date", "required": True},
-            ]
+                {"name": "dismissal_date", "label": "Дата увольнения", "type": "date",
+                 "required": True},
+            ],
         },
+        "text_template": (
+            "Прошу Вас расторгнуть со мной трудовой договор по собственному желанию "
+            "{dismissal_date} года."
+        ),
     },
 ]
+
+#: Учебные шаблоны первой версии. Не удаляются — на них ссылаются уже
+#: созданные записки, — а выключаются: из списка при создании они пропадают.
+RETIRED_CODES = ("vacation", "training", "business_trip")
+
+
+async def apply_templates(session: AsyncSession) -> list[str]:
+    """
+    Создаёт шаблоны, обновляет существующие и выключает выведенные.
+
+    Возвращает перечень сделанного — для вывода в консоль и для тестов.
+    """
+    log: list[str] = []
+
+    for spec in TEMPLATES:
+        template = (
+            await session.execute(
+                select(MemoTemplate).where(MemoTemplate.code == spec["code"])
+            )
+        ).scalar_one_or_none()
+
+        if template is None:
+            session.add(MemoTemplate(**spec, is_active=True))
+            log.append(f"создан шаблон «{spec['title']}»")
+            continue
+
+        changed = [
+            key for key in ("title", "body_schema", "text_template")
+            if getattr(template, key) != spec[key]
+        ]
+        if changed or not template.is_active:
+            for key in ("title", "body_schema", "text_template"):
+                setattr(template, key, spec[key])
+            template.is_active = True
+            log.append(f"обновлён шаблон «{spec['title']}»")
+
+    retired = (
+        await session.execute(
+            select(MemoTemplate)
+            .where(MemoTemplate.code.in_(RETIRED_CODES))
+            .where(MemoTemplate.is_active.is_(True))
+        )
+    ).scalars().all()
+    for template in retired:
+        template.is_active = False
+        log.append(f"выключен шаблон «{template.title}»")
+
+    await session.flush()
+    return log
 
 
 async def seed(admin_email: str, admin_password: str | None) -> None:
@@ -100,15 +181,8 @@ async def seed(admin_email: str, admin_password: str | None) -> None:
         else:
             print(f"администратор {admin_email} уже существует, пропущен")
 
-        for spec in TEMPLATES:
-            exists = (
-                await session.execute(
-                    select(MemoTemplate).where(MemoTemplate.code == spec["code"])
-                )
-            ).scalar_one_or_none()
-            if exists is None:
-                session.add(MemoTemplate(**spec))
-                print(f"создан шаблон «{spec['title']}»")
+        for line in await apply_templates(session):
+            print(line)
 
         await session.commit()
 

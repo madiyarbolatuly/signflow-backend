@@ -46,11 +46,22 @@ class MemoCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     template_id: int | None = None
     body: dict = Field(default_factory=dict)
+    #: «Кому» построчно. Пусто — берётся адресат из шаблона.
+    addressee: str | None = Field(default=None, max_length=500)
 
 
 class MemoUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=500)
     body: dict | None = None
+    addressee: str | None = Field(default=None, max_length=500)
+
+
+class RenderRequest(BaseModel):
+    """Записка, которую ещё не сохранили, — для предпросмотра."""
+
+    template_id: int | None = None
+    body: dict = Field(default_factory=dict)
+    addressee: str | None = Field(default=None, max_length=500)
 
 
 class SignerSpec(BaseModel):
@@ -140,13 +151,54 @@ class BodyField(BaseModel):
     display: str = ""
 
 
+class DocumentSender(BaseModel):
+    value: str
+    caption: str
+
+
+class DocumentHeaderField(BaseModel):
+    label: str
+    display: str
+
+
+class DocumentOut(BaseModel):
+    """
+    Документ в виде бумажного бланка — то же, что печатается в PDF.
+
+    Собирается на сервере (`formatting.compose_document`), экран только
+    раскладывает готовое: разойтись с PDF ему нечем.
+    """
+
+    kind: str
+    addressee: list[str]
+    sender: list[DocumentSender]
+    header_fields: list[DocumentHeaderField]
+    doc_title: str
+    paragraphs: list[str]
+    date: str
+    signer: str
+
+
+class PreviewField(BodyField):
+    #: Обязательное поле ещё не заполнено.
+    missing: bool = False
+
+
+class RenderOut(BaseModel):
+    fields: list[PreviewField]
+    #: None — у шаблона нет связного текста, документ печатается таблицей.
+    document: DocumentOut | None = None
+
+
 class MemoDetailOut(MemoOut):
     route: RouteOut | None = None
     #: Нужны листу предпросмотра: в документе стоит подпись автора, а не
     #: его идентификатор.
     author_name: str | None = None
     author_position: str | None = None
+    addressee: str | None = None
     fields: list[BodyField] = Field(default_factory=list)
+    document: DocumentOut | None = None
 
 
 class AttachmentOut(BaseModel):
@@ -187,6 +239,7 @@ class PublicMemoOut(BaseModel):
     expires_at: Moment | None = None
     attachments: list[PublicAttachmentOut] = Field(default_factory=list)
     fields: list[BodyField] = Field(default_factory=list)
+    document: DocumentOut | None = None
 
 
 # ─── уведомления ─────────────────────────────────────────────────────────────
@@ -233,6 +286,7 @@ class TemplateIn(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     body_schema: dict = Field(default_factory=dict)
     default_route: list | None = None
+    text_template: str | None = None
 
 
 class TemplateOut(BaseModel):
@@ -243,4 +297,5 @@ class TemplateOut(BaseModel):
     title: str
     body_schema: dict
     default_route: list | None = None
+    text_template: str | None = None
     is_active: bool

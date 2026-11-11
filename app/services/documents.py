@@ -12,18 +12,28 @@ from app.core.security import file_digest
 from app.db.enums import MemoStatus
 from app.db.tables import ApprovalGroup, ApprovalRoute, ApprovalStep, Memo, MemoTemplate, User
 from app.services import pdf, storage
-from app.services.formatting import label_fields
+from app.services.formatting import compose_document, label_fields
 
 
-async def _template_schema(session: AsyncSession, memo: Memo) -> dict | None:
+async def _template(session: AsyncSession, memo: Memo) -> MemoTemplate | None:
     if memo.template_id is None:
         return None
-    template = (
+    return (
         await session.execute(
             select(MemoTemplate).where(MemoTemplate.id == memo.template_id)
         )
     ).scalar_one_or_none()
+
+
+async def _template_schema(session: AsyncSession, memo: Memo) -> dict | None:
+    template = await _template(session, memo)
     return template.body_schema if template else None
+
+
+async def _author(session: AsyncSession, memo: Memo) -> User | None:
+    return (
+        await session.execute(select(User).where(User.id == memo.author_id))
+    ).scalar_one_or_none()
 
 
 async def _sheet_rows(session: AsyncSession, memo: Memo) -> list[dict]:
@@ -58,6 +68,28 @@ async def labeled_body(session: AsyncSession, memo: Memo) -> list[dict]:
     return label_fields(memo.body, await _template_schema(session, memo))
 
 
+async def memo_document(session: AsyncSession, memo: Memo) -> dict | None:
+    """
+    Документ записки в виде бумажного бланка: кому, от кого, текст, дата.
+
+    None — у шаблона нет связного текста, документ печатается таблицей.
+    Датой документа считается день отправки; у черновика — день создания.
+    """
+    template = await _template(session, memo)
+    if template is None or not template.text_template:
+        return None
+    author = await _author(session, memo)
+    return compose_document(
+        schema=template.body_schema,
+        text_template=template.text_template,
+        body=memo.body,
+        addressee=memo.addressee,
+        author_name=author.full_name if author else None,
+        author_position=author.position if author else None,
+        dated=memo.submitted_at or memo.created_at,
+    )
+
+
 async def build_memo_pdf(session: AsyncSession, memo: Memo) -> str:
     """
     Формирует PDF служебной записки и запоминает его хеш.
@@ -66,14 +98,11 @@ async def build_memo_pdf(session: AsyncSession, memo: Memo) -> str:
     каждая подпись: так расхождение с текущим файлом доказуемо (ТЗ, п. 5.1.6).
     Лист согласования при этом не добавляется — подписей ещё нет.
     """
-    author = (
-        await session.execute(select(User).where(User.id == memo.author_id))
-    ).scalar_one()
-
     data = pdf.render(
         memo=memo,
-        author=author,
+        author=await _author(session, memo),
         template_schema=await _template_schema(session, memo),
+        document=await memo_document(session, memo),
     )
 
     relative = f"memos/{memo.id}/memo.pdf"
@@ -102,15 +131,12 @@ async def finalize_memo_pdf(session: AsyncSession, memo_id: int) -> str | None:
     if memo is None or memo.status not in (MemoStatus.approved, MemoStatus.rejected):
         return None
 
-    author = (
-        await session.execute(select(User).where(User.id == memo.author_id))
-    ).scalar_one()
-
     data = pdf.render(
         memo=memo,
-        author=author,
+        author=await _author(session, memo),
         template_schema=await _template_schema(session, memo),
         sheet_rows=await _sheet_rows(session, memo),
+        document=await memo_document(session, memo),
     )
 
     relative = f"memos/{memo.id}/memo_signed.pdf"

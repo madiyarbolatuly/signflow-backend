@@ -95,6 +95,191 @@ def display_value(value, field_type: str | None = None) -> str:
     return str(value)
 
 
+#: Месяц в родительном падеже — «04 мая 2026», как в приказах компании.
+_MONTHS_GENITIVE = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+
+#: Пропуск в тексте документа, пока поле не заполнено. Виден на листе
+#: предпросмотра так же, как пустая строка на бумажном бланке.
+GAP = "________"
+
+_PLACEHOLDER = re.compile(r"\{([a-z_][a-z0-9_]*)(?::([^{}]+))?\}")
+
+
+def long_date(value: date) -> str:
+    return f"{value.day:02d} {_MONTHS_GENITIVE[value.month - 1]} {value.year}"
+
+
+def _plural(n: int, forms: list[str]) -> str:
+    """Форма слова для числа: 1 день, 2 дня, 5 дней, 11 дней, 21 день."""
+    if len(forms) != 3:
+        return forms[-1]
+    n = abs(n)
+    if n % 10 == 1 and n % 100 != 11:
+        return forms[0]
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return forms[1]
+    return forms[2]
+
+
+def _is_empty(value) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _text_value(value, field_type: str | None, forms: str | None) -> str:
+    """Значение поля внутри связного текста документа."""
+    if _is_empty(value):
+        # Слово при числе остаётся и у пропуска: «сроком на ________
+        # календарных дней», как на бумажном бланке, а не «сроком на ________.»
+        return f"{GAP} {forms.split('|')[-1]}" if forms else GAP
+
+    if field_type in (None, "date"):
+        match = _ISO_DATE.match(str(value).strip())
+        if match:
+            try:
+                return long_date(date(*(int(p) for p in match.groups())))
+            except ValueError:
+                pass
+
+    if forms:
+        # «{days:календарный день|календарных дня|календарных дней}» → «21 календарный день».
+        try:
+            n = int(str(value).strip())
+        except ValueError:
+            return f"{value} {forms.split('|')[-1]}"
+        return f"{_as_number(n)} {_plural(n, forms.split('|'))}"
+
+    return display_value(value, field_type)
+
+
+def render_text(text_template: str, body: dict | None, schema: dict | None) -> list[str]:
+    """
+    Связный текст документа по шаблону, разбитый на абзацы.
+
+    Подстановка `{имя_поля}`; для числа можно указать формы слова —
+    `{days:календарный день|календарных дня|календарных дней}`, иначе в
+    документе выходит «21 календарных дней». Незаполненное поле, как и поле,
+    которого нет в схеме, становится пропуском — текст не ломается, а пробел
+    виден на листе.
+    """
+    types = {
+        f["name"]: f.get("type")
+        for f in (schema or {}).get("fields", [])
+        if f.get("name")
+    }
+    body = body or {}
+
+    def substitute(match: re.Match) -> str:
+        name, forms = match.group(1), match.group(2)
+        return _text_value(body.get(name), types.get(name), forms)
+
+    filled = _PLACEHOLDER.sub(substitute, text_template)
+    return [p.strip() for p in re.split(r"\n\s*\n", filled) if p.strip()]
+
+
+def placeholders(text_template: str) -> set[str]:
+    """Имена полей, на которые ссылается текст шаблона."""
+    return {m.group(1) for m in _PLACEHOLDER.finditer(text_template)}
+
+
+def compose_document(
+    *,
+    schema: dict | None,
+    text_template: str | None,
+    body: dict | None,
+    addressee: str | None,
+    author_name: str | None,
+    author_position: str | None,
+    dated: datetime | date | None,
+) -> dict | None:
+    """
+    Документ в виде, повторяющем бумажный бланк компании.
+
+    Справа — кому и от кого (с подписями «(должность)», «(ФИО)» под
+    значениями, как на бланке), затем название документа, связный текст и
+    дата. Одна функция для PDF, карточки, страницы подписания и
+    предпросмотра: документ не может выглядеть по-разному в разных местах.
+
+    Возвращает None, если у шаблона нет текста — тогда документ печатается
+    таблицей полей.
+    """
+    if not text_template:
+        return None
+
+    schema = schema or {}
+    body = body or {}
+
+    lines = addressee.splitlines() if addressee and addressee.strip() else schema.get("addressee") or []
+    addressee_lines = [line.strip() for line in lines if line.strip()]
+
+    sender = []
+    if author_position and author_position.strip():
+        sender.append({"value": author_position.strip(), "caption": "должность"})
+    sender.append({"value": (author_name or "").strip() or GAP, "caption": "ФИО"})
+
+    # Поля шапки — то, что на бланке стоит под ФИО: адреса, телефон.
+    header_fields = [
+        {
+            "label": f.get("label") or f["name"],
+            "display": GAP if _is_empty(body.get(f["name"])) else display_value(body.get(f["name"]), f.get("type")),
+        }
+        for f in schema.get("fields", [])
+        if f.get("name") and f.get("placement") == "header"
+    ]
+
+    if isinstance(dated, datetime):
+        dated = to_local(dated).date()
+    date_text = (
+        f"«{dated.day:02d}» {_MONTHS_GENITIVE[dated.month - 1]} {dated.year} г."
+        if dated
+        else ""
+    )
+
+    return {
+        "kind": "letter",
+        "addressee": addressee_lines,
+        "sender": sender,
+        "header_fields": header_fields,
+        "doc_title": schema.get("doc_title") or "Заявление",
+        "paragraphs": render_text(text_template, body, schema),
+        "date": date_text,
+        "signer": (author_name or "").strip(),
+    }
+
+
+def preview_fields(body: dict | None, schema: dict | None) -> list[dict]:
+    """
+    Поля для предпросмотра ещё не отправленной записки.
+
+    В отличие от `label_fields`, идёт по схеме, а не по присланным данным:
+    обязательное поле показывается и пустым — с отметкой `missing`, чтобы
+    его было видно на листе. Пустые необязательные поля в документ не идут.
+    """
+    body = body or {}
+    result = []
+    for f in (schema or {}).get("fields", []):
+        name = f.get("name")
+        if not name:
+            continue
+        value = body.get(name)
+        empty = _is_empty(value)
+        if empty and not f.get("required"):
+            continue
+        result.append(
+            {
+                "name": name,
+                "label": f.get("label") or name,
+                "type": f.get("type"),
+                "value": None if empty else value,
+                "display": "" if empty else display_value(value, f.get("type")),
+                "missing": empty,
+            }
+        )
+    return result
+
+
 def label_fields(body: dict | None, schema: dict | None) -> list[dict]:
     """
     Поля записки с подписями, типами и готовым к показу значением.

@@ -298,3 +298,81 @@ async def test_author_sees_the_outcome_in_notifications(api):
     assert after["items"][0]["status"] == "read"
 
     assert (await client.get(f"{PREFIX}/notifications")).status_code == 401
+
+
+# ─── заявления по бланкам ────────────────────────────────────────────────────
+async def test_dismissal_statement_from_preview_to_signed_pdf(api):
+    """
+    Заявление на увольнение: предпросмотр до сохранения, карточка, страница
+    подписания и PDF показывают один и тот же документ по образцу бланка.
+    """
+    from sqlalchemy import select
+
+    from app.db.tables import MemoTemplate
+    from app.scripts.seed import apply_templates
+
+    client, maker = api
+    async with maker() as s:
+        await apply_templates(s)
+        await s.commit()
+        template_id = (
+            await s.execute(select(MemoTemplate.id).where(MemoTemplate.code == "dismissal"))
+        ).scalar_one()
+
+    headers = await _login(client, "author@example.com", "verysecret123")
+
+    templates = (await client.get(f"{PREFIX}/admin/templates", headers=headers)).json()
+    assert [t["code"] for t in templates] == ["hiring", "annual_leave", "dismissal"]
+
+    # ─── предпросмотр до сохранения: пустое поле видно как пропуск ──────────
+    resp = await client.post(
+        f"{PREFIX}/memos/render", headers=headers,
+        json={"template_id": template_id, "body": {}},
+    )
+    assert resp.status_code == 200, resp.text
+    preview = resp.json()
+    assert preview["fields"][0]["missing"] is True
+    assert "________" in preview["document"]["paragraphs"][0]
+    assert preview["document"]["sender"][-1]["value"] == "Автор Служебки"
+
+    resp = await client.post(
+        f"{PREFIX}/memos/render", headers=headers,
+        json={"template_id": template_id, "body": {"dismissal_date": "2026-12-15"}},
+    )
+    assert resp.json()["document"]["paragraphs"] == [
+        "Прошу Вас расторгнуть со мной трудовой договор по собственному желанию "
+        "15 декабря 2026 года."
+    ]
+
+    # ─── отправка ────────────────────────────────────────────────────────────
+    created = await client.post(
+        f"{PREFIX}/memos", headers=headers,
+        json={
+            "title": "Заявление на увольнение",
+            "template_id": template_id,
+            "body": {"dismissal_date": "2026-12-15"},
+            "addressee": "Директору\nТОО «GQ-Group Invest»",
+        },
+    )
+    memo_id = created.json()["id"]
+    submitted = await client.post(
+        f"{PREFIX}/memos/{memo_id}/submit", headers=headers,
+        json={"route": [{"policy": "all", "signers": [{"email": "boss@example.com"}]}]},
+    )
+    assert submitted.status_code == 200, submitted.text
+    document = submitted.json()["document"]
+    assert document["addressee"] == ["Директору", "ТОО «GQ-Group Invest»"], (
+        "адресат, заданный в записке, важнее адресата шаблона"
+    )
+    assert "15 декабря 2026 года" in document["paragraphs"][0]
+
+    # ─── подписант видит тот же документ ─────────────────────────────────────
+    async with maker() as s:
+        token = (await s.execute(select(ApprovalStep.action_token))).scalar_one()
+    public = (await client.get(f"{PREFIX}/public/sign/{token}")).json()
+    assert public["document"] == document
+
+    pdf = await client.get(f"{PREFIX}/public/sign/{token}/pdf")
+    assert pdf.status_code == 200
+    assert pdf.content.startswith(b"%PDF-")
+

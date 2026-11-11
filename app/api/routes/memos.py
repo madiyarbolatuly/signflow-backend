@@ -3,6 +3,8 @@
 изнутри системы.
 """
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, BackgroundTasks, File, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import or_, select
@@ -20,6 +22,7 @@ from app.db.tables import (
     Memo,
     User,
 )
+from app.db.tables import MemoTemplate
 from app.schemas import (
     AttachmentOut,
     DecisionRequest,
@@ -27,9 +30,12 @@ from app.schemas import (
     MemoDetailOut,
     MemoOut,
     MemoUpdate,
+    RenderOut,
+    RenderRequest,
     SubmitRequest,
 )
 from app.services import approval, documents, storage
+from app.services.formatting import compose_document, preview_fields
 from app.services.mail import send_outbox
 
 #: Предел размера вложения. Без него один запрос способен занять диск.
@@ -56,6 +62,7 @@ async def create_memo(data: MemoCreate, session: SessionDep, user: CurrentUser) 
         template_id=data.template_id,
         title=data.title,
         body=data.body,
+        addressee=(data.addressee or "").strip() or None,
         status=MemoStatus.draft,
     )
     session.add(memo)
@@ -75,8 +82,46 @@ async def update_memo(
         memo.title = data.title
     if data.body is not None:
         memo.body = data.body
+    if data.addressee is not None:
+        memo.addressee = data.addressee.strip() or None
     await session.flush()
     return memo
+
+
+@router.post("/render", response_model=RenderOut)
+async def render_preview(
+    data: RenderRequest, session: SessionDep, user: CurrentUser
+) -> dict:
+    """
+    Предпросмотр ещё не сохранённой записки.
+
+    Лист в редакторе строится тем же кодом, что PDF, а не копией правил
+    форматирования на клиенте: копия рано или поздно разошлась бы с
+    документом.
+    """
+    template = None
+    if data.template_id is not None:
+        template = (
+            await session.execute(
+                select(MemoTemplate).where(MemoTemplate.id == data.template_id)
+            )
+        ).scalar_one_or_none()
+        if template is None:
+            raise http_404("Шаблон не найден")
+
+    schema = template.body_schema if template else None
+    return {
+        "fields": preview_fields(data.body, schema),
+        "document": compose_document(
+            schema=schema,
+            text_template=template.text_template if template else None,
+            body=data.body,
+            addressee=data.addressee,
+            author_name=user.full_name,
+            author_position=user.position,
+            dated=datetime.now(timezone.utc),
+        ),
+    }
 
 
 @router.post("/{memo_id}/submit", response_model=MemoDetailOut)
@@ -211,6 +256,7 @@ async def _detail_payload(session, memo: Memo) -> dict:
         "fields": await documents.labeled_body(session, memo),
         "author_name": author.full_name if author else None,
         "author_position": author.position if author else None,
+        "document": await documents.memo_document(session, memo),
     }
 
 

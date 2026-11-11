@@ -255,7 +255,7 @@ def _sheet_flowables(*, memo, rows: list[dict], st: dict) -> list:
         PageBreak(),
         Paragraph("ЛИСТ СОГЛАСОВАНИЯ", st["title"]),
         Paragraph(
-            f"к служебной записке № {_text(memo.number or 'без номера')} — {_text(memo.title)}",
+            f"к документу № {_text(memo.number or 'без номера')} — {_text(memo.title)}",
             st["small"],
         ),
         Spacer(1, 5 * mm),
@@ -265,15 +265,87 @@ def _sheet_flowables(*, memo, rows: list[dict], st: dict) -> list:
     ]
 
 
+def _letter_flowables(*, memo, document: dict, st: dict) -> list:
+    """
+    Документ по образцу бумажного бланка компании.
+
+    Справа — «Генеральному директору … от (должность) (ФИО)», под значениями
+    мелкие подписи «(должность)», «(ФИО)», как на бланке. По центру —
+    название документа, ниже текст с абзацным отступом, внизу дата и
+    подписант. Содержимое целиком приходит из `compose_document`: эта
+    функция только раскладывает его по листу.
+    """
+    caption = ParagraphStyle("SfCaption", parent=st["small"], fontSize=7.5, leading=9,
+                             textColor=colors.HexColor("#666666"), alignment=TA_CENTER)
+    right = ParagraphStyle("SfRight", parent=st["body"], fontSize=11, leading=15,
+                           alignment=0)
+    paragraph = ParagraphStyle("SfLetter", parent=st["body"], fontSize=12, leading=18,
+                               firstLineIndent=12 * mm)
+    title = ParagraphStyle("SfLetterTitle", parent=st["title"], fontSize=14, spaceAfter=2)
+
+    block: list = [Paragraph(_text(line), right) for line in document["addressee"]]
+    for index, item in enumerate(document["sender"]):
+        prefix = "от " if index == 0 else ""
+        block += [
+            Spacer(1, 1.5 * mm),
+            Paragraph(f"{prefix}<u>{_text(item['value'])}</u>", right),
+            Paragraph(f"({_text(item['caption'])})", caption),
+        ]
+    for field in document["header_fields"]:
+        block += [
+            Spacer(1, 1 * mm),
+            Paragraph(f"{_text(field['label'])}: {_text(field['display'])}", right),
+        ]
+
+    # Шапка занимает правую половину листа, как на бланке.
+    head = Table([["", block]], colWidths=[80 * mm, 90 * mm])
+    head.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+
+    flow: list = [
+        head,
+        Spacer(1, 14 * mm),
+        Paragraph(_text(document["doc_title"]), title),
+    ]
+    if memo.number:
+        flow.append(Paragraph(f"рег. № {_text(memo.number)}", caption))
+    flow.append(Spacer(1, 8 * mm))
+    for text in document["paragraphs"]:
+        flow += [Paragraph(_text(text), paragraph), Spacer(1, 2 * mm)]
+
+    footer = Table(
+        [[
+            Paragraph(_text(document["date"]), right),
+            [
+                Paragraph(_text(document["signer"]), right),
+                Paragraph("(подано через SignFlow)", caption),
+            ],
+        ]],
+        colWidths=[85 * mm, 85 * mm],
+    )
+    footer.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    flow += [Spacer(1, 14 * mm), footer]
+    return flow
+
+
 def render(
     *,
     memo,
     author,
     template_schema: dict | None = None,
     sheet_rows: list[dict] | None = None,
+    document: dict | None = None,
 ) -> bytes:
     """
-    Собирает PDF. Передан `sheet_rows` — к документу добавляется лист
+    Собирает PDF. Передан `document` — записка печатается по образцу бланка,
+    иначе таблицей полей. Передан `sheet_rows` — добавляется лист
     согласования.
     """
     from io import BytesIO
@@ -287,12 +359,15 @@ def render(
         rightMargin=15 * mm,
         topMargin=20 * mm,
         bottomMargin=20 * mm,
-        title=f"Служебная записка {memo.number or ''}".strip(),
+        title=f"{memo.title} {memo.number or ''}".strip(),
     )
 
-    flow = _memo_flowables(
-        memo=memo, author=author, template_schema=template_schema, st=st
-    )
+    if document and document.get("kind") == "letter":
+        flow = _letter_flowables(memo=memo, document=document, st=st)
+    else:
+        flow = _memo_flowables(
+            memo=memo, author=author, template_schema=template_schema, st=st
+        )
     if sheet_rows:
         flow += _sheet_flowables(memo=memo, rows=sheet_rows, st=st)
 
