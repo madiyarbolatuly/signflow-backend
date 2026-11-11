@@ -270,7 +270,7 @@ async def test_author_sees_the_outcome_in_notifications(api):
     listing = (await client.get(f"{PREFIX}/notifications", headers=headers)).json()
     assert listing["unread"] == 1
     item = listing["items"][0]
-    assert "согласована" in item["message"]
+    assert "согласован" in item["message"]
     assert item["link"] == f"/memos/{memo_id}"
     assert item["status"] == "unread"
 

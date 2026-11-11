@@ -174,7 +174,7 @@ async def test_rejection_stops_whole_route(session, memo):
     )
     assert all(g.status == GroupStatus.failed for g in groups.scalars().all())
 
-    assert result.outbox and "отклонена" in result.outbox[0].body
+    assert result.outbox and "отклонён" in result.outbox[0].body
 
 
 async def test_rejection_requires_a_reason(session, memo):
@@ -417,3 +417,43 @@ async def test_number_is_kept_when_memo_already_has_one(session, memo):
         session, memo=memo, spec=[_level(GroupPolicy.all_of, "boss@example.com")]
     )
     assert memo.number == "СЗ-2025-0777"
+
+
+# ─── тексты, которые видит человек ───────────────────────────────────────────
+async def test_link_after_recall_names_the_real_reason(session, memo, author):
+    """Отзыв автором — не «решение принято другим участником»."""
+    route = await approval.build_route(
+        session, memo=memo, spec=[_level(GroupPolicy.all_of, "boss@example.com")]
+    )
+    token = (await _steps(session, route.id))[0].action_token
+    await approval.recall(session, memo=memo, actor=author.id)
+
+    with pytest.raises(HTTPException) as err:
+        await approval.resolve_sign_token(session, token)
+    assert "отозвал" in err.value.detail
+    assert "другим участником" not in err.value.detail
+
+
+async def test_link_after_rejection_elsewhere_names_the_real_reason(session, memo):
+    route = await approval.build_route(
+        session,
+        memo=memo,
+        spec=[_level(GroupPolicy.all_of, "a@example.com", "b@example.com")],
+    )
+    a, b = await _steps(session, route.id)
+    await approval.decide(session, step=a, approve=False, comment="Нет", actor="a")
+
+    with pytest.raises(HTTPException) as err:
+        await approval.resolve_sign_token(session, b.action_token)
+    assert "отклонён" in err.value.detail
+
+
+async def test_signer_letter_names_the_author_not_an_id(session, memo, author):
+    route = await approval.build_route(
+        session, memo=memo, spec=[_level(GroupPolicy.all_of, "boss@example.com")]
+    )
+    letter = approval.collect_outbox(route)[0]
+    assert author.id not in letter.body, "в письме был внутренний идентификатор автора"
+    assert "Автор: Автор Служебки, Инженер" in letter.body
+    assert memo.number in letter.subject
+

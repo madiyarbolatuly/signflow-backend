@@ -295,6 +295,20 @@ async def _activate_group(
     group.status = GroupStatus.active
     expires = _now() + timedelta(days=settings.sign_link_ttl_days)
 
+    # В письме нужен человек, а не идентификатор: раньше в строку «Автор»
+    # подставлялся `memo.author_id`, и согласующий получал «Автор:
+    # 01M6ZXF5…». Читаем запросом — ленивая подгрузка связи в асинхронной
+    # сессии недоступна.
+    author = (
+        await session.execute(select(User).where(User.id == memo.author_id))
+    ).scalar_one_or_none()
+    author_line = (
+        f"{author.full_name}, {author.position}"
+        if author and author.position
+        else (author.full_name if author else "")
+    )
+    number = f" № {memo.number}" if memo.number else ""
+
     for step in group.steps:
         if step.status != StepStatus.pending:
             continue
@@ -306,11 +320,11 @@ async def _activate_group(
         outbox.append(
             OutboxItem(
                 to=step.signer_email,
-                subject=f"Служебная записка {memo.number or ''} на согласование".strip(),
+                subject=f"На согласование: «{memo.title}»{number}",
                 body=(
-                    f"Вам направлена служебная записка на согласование.\n\n"
-                    f"Тема: {memo.title}\n"
-                    f"Автор: {memo.author_id}\n\n"
+                    f"Вам направлен документ на согласование.\n\n"
+                    f"Документ: {memo.title}{number}\n"
+                    f"Автор: {author_line}\n\n"
                     f"Открыть и принять решение: {link}\n\n"
                     f"Ссылка одноразовая и действует до "
                     f"{to_local(expires).strftime('%d.%m.%Y')}."
@@ -322,7 +336,7 @@ async def _activate_group(
             session.add(
                 Notification(
                     user_id=step.signer_user_id,
-                    message=f"Служебная записка «{memo.title}» ожидает вашего решения",
+                    message=f"Документ «{memo.title}» ожидает вашего решения",
                     link=f"/memos/{memo.id}",
                 )
             )
@@ -377,7 +391,7 @@ async def decide(
     # Отозванный маршрут гасит свои задания, поэтому «задание больше не
     # требуется» участник увидит и в этом случае.
     if step.status != StepStatus.active:
-        raise http_409(_step_refusal(step))
+        raise http_409(_step_refusal(step, route.status))
     if route.status != RouteStatus.active:
         raise http_409(f"Маршрут уже завершён со статусом «{route.status}»")
 
@@ -434,7 +448,7 @@ async def decide(
         _notify_author(
             session,
             memo,
-            f"Служебная записка «{memo.title}» отклонена: {step.comment}",
+            f"Документ «{memo.title}» отклонён: {step.comment}",
         )
     else:
         if _group_satisfied(current):
@@ -457,7 +471,7 @@ async def decide(
                 memo.completed_at = route.completed_at
                 outbox.append(_author_letter(memo, approved=True))
                 _notify_author(
-                    session, memo, f"Служебная записка «{memo.title}» согласована"
+                    session, memo, f"Документ «{memo.title}» согласован"
                 )
                 session.add(
                     AuditLog(
@@ -493,15 +507,36 @@ def _notify_author(session: AsyncSession, memo: Memo, message: str) -> None:
     )
 
 
-def _step_refusal(step: ApprovalStep) -> str:
-    """Внятная причина отказа вместо общего «шаг недоступен»."""
+def _step_refusal(step: ApprovalStep, route_status: str | None = None) -> str:
+    """
+    Внятная причина отказа вместо общего «шаг недоступен».
+
+    «Задание больше не требуется» бывает по трём разным причинам, и человеку
+    по ссылке нужна настоящая. Раньше всегда писалось «решение принято
+    другим участником» — в том числе когда документ отозвал автор.
+    """
+    if step.status == StepStatus.not_required:
+        if route_status == RouteStatus.recalled:
+            return "Автор отозвал документ — ваше решение больше не требуется"
+        if route_status == RouteStatus.rejected:
+            return "Документ отклонён на другом этапе — ваше решение больше не требуется"
+        return "Задание больше не требуется: решение принято другим участником"
     return {
         StepStatus.approved: "Решение по этому заданию уже принято",
         StepStatus.rejected: "Решение по этому заданию уже принято",
-        StepStatus.not_required: "Задание больше не требуется: решение принято другим участником",
         StepStatus.expired: "Срок действия ссылки истёк",
         StepStatus.pending: "Очередь этого уровня ещё не наступила",
     }.get(step.status, "Задание недоступно")
+
+
+async def _route_status_of(session: AsyncSession, step: ApprovalStep) -> str | None:
+    return (
+        await session.execute(
+            select(ApprovalRoute.status)
+            .join(ApprovalGroup, ApprovalGroup.route_id == ApprovalRoute.id)
+            .where(ApprovalGroup.id == step.group_id)
+        )
+    ).scalar_one_or_none()
 
 
 def _group_satisfied(group: ApprovalGroup) -> bool:
@@ -578,13 +613,13 @@ def _fail_route(
 def _author_letter(memo: Memo, *, approved: bool, comment: str | None = None) -> OutboxItem:
     if approved:
         body = (
-            f"Служебная записка «{memo.title}» согласована полностью.\n"
+            f"Документ «{memo.title}» согласован полностью.\n"
             f"Регистрационный номер: {memo.number}."
         )
         subject = f"Согласовано: {memo.title}"
     else:
         body = (
-            f"Служебная записка «{memo.title}» отклонена.\n"
+            f"Документ «{memo.title}» отклонён.\n"
             f"Причина: {comment or 'не указана'}."
         )
         subject = f"Отклонено: {memo.title}"
@@ -600,9 +635,9 @@ async def recall(
 ) -> None:
     """Отзывает записку: маршрут останавливается, все ссылки гаснут."""
     if memo.author_id != actor:
-        raise http_403("Отозвать служебную записку может только её автор")
+        raise http_403("Отозвать документ может только его автор")
     if memo.status not in MemoStatus.OPEN:
-        raise http_409(f"Нельзя отозвать записку в состоянии «{memo.status}»")
+        raise http_409(f"Нельзя отозвать документ в состоянии «{memo.status}»")
 
     route = (
         await session.execute(
@@ -610,7 +645,7 @@ async def recall(
         )
     ).scalar_one_or_none()
     if route is None:
-        raise http_409("У служебной записки нет маршрута согласования")
+        raise http_409("У документа нет маршрута согласования")
 
     route = await _lock_route(session, route.id)
     groups = await _load_groups(session, route.id)
@@ -661,7 +696,7 @@ async def resolve_sign_token(session: AsyncSession, token: str) -> ApprovalStep:
     if step.token_used_at is not None:
         raise http_410("Ссылка уже использована: решение по ней принято")
     if step.status != StepStatus.active:
-        raise http_410(_step_refusal(step))
+        raise http_410(_step_refusal(step, await _route_status_of(session, step)))
 
     expires = _as_aware(step.token_expires_at)
     if expires is not None and expires < _now():

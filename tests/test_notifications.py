@@ -47,7 +47,7 @@ async def test_author_is_notified_of_approval(session, memo, author):
     await approval.decide(session, step=step, approve=True, actor="boss")
     await session.flush()
 
-    assert any("согласована" in m for m in await _messages(session, author.id))
+    assert any("согласован" in m for m in await _messages(session, author.id))
 
 
 async def test_author_is_notified_of_rejection_with_the_reason(session, memo, author):
@@ -63,4 +63,4 @@ async def test_author_is_notified_of_rejection_with_the_reason(session, memo, au
     await session.flush()
 
     messages = await _messages(session, author.id)
-    assert any("отклонена" in m and "Нет бюджета" in m for m in messages)
+    assert any("отклонён" in m and "Нет бюджета" in m for m in messages)
