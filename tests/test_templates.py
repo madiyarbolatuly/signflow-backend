@@ -252,3 +252,62 @@ async def test_seed_creates_updates_and_retires(session):
     await session.flush()
     assert await apply_templates(session) == ["обновлён шаблон «Заявление на приём на работу»"]
     assert hiring.text_template == _by_code("hiring")["text_template"]
+
+
+# ─── штамп электронной подписи ───────────────────────────────────────────────
+@pytest.mark.parametrize(
+    "full,short",
+    [
+        ("Садуакас Мадияр Болатулы", "Садуакас М. Б."),
+        ("Қуанышқызы Назерке", "Қуанышқызы Н."),
+        ("Администратор", "Администратор"),
+        ("", ""),
+    ],
+)
+def test_short_name_like_company_documents(full, short):
+    from app.services.formatting import short_name
+
+    assert short_name(full) == short
+
+
+def test_stamp_appears_only_once_submitted():
+    t = _by_code("dismissal")
+    common = dict(
+        schema=t["body_schema"], text_template=t["text_template"], body=SAMPLE,
+        addressee=None, author_name="Садуакас Мадияр Болатулы", author_position="Инженер",
+        dated=date(2026, 11, 11),
+    )
+    assert compose_document(**common)["stamp"] is None, "у черновика подписи ещё нет"
+
+    stamp = compose_document(
+        **common, submitted_at=datetime(2026, 11, 11, 7, 15, tzinfo=timezone.utc)
+    )["stamp"]
+    assert stamp == {"name": "Садуакас М. Б.", "at": "11.11.2026 12:15", "zone": "UTC+05:00"}
+
+
+def test_signed_letter_pdf_with_sheet_builds():
+    from types import SimpleNamespace
+
+    t = _by_code("annual_leave")
+    memo = SimpleNamespace(
+        number="СЗ-2026-0001", title=t["title"], body=SAMPLE, status="approved",
+        created_at=datetime(2026, 11, 11, 5, 0, tzinfo=timezone.utc),
+        submitted_at=datetime(2026, 11, 11, 5, 0, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 11, 11, 6, 0, tzinfo=timezone.utc),
+        file_hash="ab" * 32,
+    )
+    author = SimpleNamespace(full_name="Садуакас Мадияр Болатулы", position="Инженер")
+    doc = compose_document(
+        schema=t["body_schema"], text_template=t["text_template"], body=SAMPLE,
+        addressee=None, author_name=author.full_name, author_position=author.position,
+        dated=memo.submitted_at, submitted_at=memo.submitted_at,
+    )
+    rows = [
+        {"order_no": 1, "signer_name": "Сапарбаева А. С.", "signer_position": "Руководитель",
+         "status": "approved", "decided_at": memo.completed_at, "comment": None},
+        {"order_no": 2, "signer_name": "Капанова И. М.", "signer_position": "Зам. ген. директора",
+         "status": "not_required", "decided_at": None, "comment": None},
+    ]
+    data = pdf.render(memo=memo, author=author, document=doc, sheet_rows=rows)
+    assert data.startswith(b"%PDF-")
+

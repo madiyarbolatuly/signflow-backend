@@ -87,6 +87,7 @@ async def memo_document(session: AsyncSession, memo: Memo) -> dict | None:
         author_name=author.full_name if author else None,
         author_position=author.position if author else None,
         dated=memo.submitted_at or memo.created_at,
+        submitted_at=memo.submitted_at,
     )
 
 

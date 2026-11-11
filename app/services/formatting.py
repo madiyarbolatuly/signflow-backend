@@ -184,6 +184,18 @@ def placeholders(text_template: str) -> set[str]:
     return {m.group(1) for m in _PLACEHOLDER.finditer(text_template)}
 
 
+def short_name(full_name: str | None) -> str:
+    """
+    «Садуакас Мадияр Болатулы» → «Садуакас М. Б.» — как подписывают в
+    документах компании («М. Озарчук», «А. Жусупова»). Одно слово остаётся
+    как есть.
+    """
+    parts = (full_name or "").split()
+    if len(parts) < 2:
+        return (full_name or "").strip()
+    return f"{parts[0]} " + " ".join(f"{p[0]}." for p in parts[1:3])
+
+
 def compose_document(
     *,
     schema: dict | None,
@@ -193,6 +205,7 @@ def compose_document(
     author_name: str | None,
     author_position: str | None,
     dated: datetime | date | None,
+    submitted_at: datetime | None = None,
 ) -> dict | None:
     """
     Документ в виде, повторяющем бумажный бланк компании.
@@ -237,6 +250,18 @@ def compose_document(
         else ""
     )
 
+    # Штамп электронной подписи вместо строки «______ (подпись)» бланка.
+    # Есть только у отправленного документа: подписью автора служит сама
+    # отправка, и её время — момент подписания.
+    stamp = None
+    if submitted_at is not None:
+        local = to_local(submitted_at)
+        stamp = {
+            "name": short_name(author_name),
+            "at": local.strftime("%d.%m.%Y %H:%M"),
+            "zone": timezone_label(),
+        }
+
     return {
         "kind": "letter",
         "addressee": addressee_lines,
@@ -246,6 +271,7 @@ def compose_document(
         "paragraphs": render_text(text_template, body, schema),
         "date": date_text,
         "signer": (author_name or "").strip(),
+        "stamp": stamp,
     }
 
 

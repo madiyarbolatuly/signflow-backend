@@ -5,10 +5,12 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Шрифт с кириллицей. Встроенные в reportlab шрифты знают только Latin-1,
-# поэтому без этого пакета русский текст в PDF выходит набором точек.
+# Шрифты с кириллицей. Встроенные в reportlab шрифты знают только Latin-1,
+# поэтому без них русский текст в PDF выходит набором точек. Liberation Serif
+# метрически совместим с Times New Roman, которым набраны бланки компании;
+# DejaVu — запасной.
 # Проверяется тестом test_cyrillic_font_is_available.
-RUN apt-get update     && apt-get install -y --no-install-recommends fonts-dejavu-core     && rm -rf /var/lib/apt/lists/*
+RUN apt-get update     && apt-get install -y --no-install-recommends fonts-liberation fonts-dejavu-core     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv
 

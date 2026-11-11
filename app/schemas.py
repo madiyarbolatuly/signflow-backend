@@ -161,6 +161,14 @@ class DocumentHeaderField(BaseModel):
     display: str
 
 
+class DocumentStamp(BaseModel):
+    """Штамп электронной подписи автора — есть у отправленного документа."""
+
+    name: str
+    at: str
+    zone: str
+
+
 class DocumentOut(BaseModel):
     """
     Документ в виде бумажного бланка — то же, что печатается в PDF.
@@ -177,6 +185,7 @@ class DocumentOut(BaseModel):
     paragraphs: list[str]
     date: str
     signer: str
+    stamp: DocumentStamp | None = None
 
 
 class PreviewField(BodyField):
