@@ -10,3 +10,7 @@ __pycache__/
 storage/
 .pytest_cache/
 .ruff_cache/
+
+# Выгрузки с персональными данными сотрудников (ФИО, телефоны, почта).
+# В репозиторий не попадают: их читает app/scripts/import_employees.py.
+data/
