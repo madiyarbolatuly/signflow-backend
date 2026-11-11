@@ -202,10 +202,15 @@ async def _authorized_memo(session, memo_id: int, user: User) -> Memo:
 
 async def _detail_payload(session, memo: Memo) -> dict:
     """Ответ карточки: поля записки отдаются с подписями из шаблона."""
+    author = (
+        await session.execute(select(User).where(User.id == memo.author_id))
+    ).scalar_one_or_none()
     return {
         **{c.name: getattr(memo, c.name) for c in Memo.__table__.columns},
         "route": memo.route,
         "fields": await documents.labeled_body(session, memo),
+        "author_name": author.full_name if author else None,
+        "author_position": author.position if author else None,
     }
 
 

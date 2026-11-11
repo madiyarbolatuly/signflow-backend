@@ -9,6 +9,7 @@
 
 from datetime import datetime
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
@@ -26,6 +27,8 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+from app.services.formatting import label_fields, timezone_label, to_local
 
 FONT_NAME = "SignFlowBody"
 FONT_BOLD = "SignFlowBold"
@@ -113,15 +116,15 @@ def _fmt(value) -> str:
     return str(value)
 
 
-def _field_labels(body_schema: dict | None) -> dict[str, str]:
-    """Сопоставление «имя поля → подпись» из схемы шаблона."""
-    if not body_schema:
-        return {}
-    return {
-        f.get("name"): f.get("label", f.get("name", ""))
-        for f in body_schema.get("fields", [])
-        if f.get("name")
-    }
+def _text(value) -> str:
+    """
+    Экранирует пользовательский текст перед вставкой в Paragraph.
+
+    Paragraph разбирает содержимое как разметку: тема «Закупка <срочно>»
+    или цель «R&D» без экранирования либо роняют сборку PDF, либо молча
+    теряют часть текста.
+    """
+    return escape(_fmt(value))
 
 
 DECISION_LABEL = {
@@ -135,32 +138,36 @@ DECISION_LABEL = {
 
 
 def _memo_flowables(*, memo, author, template_schema: dict | None, st: dict) -> list:
-    created = memo.created_at.strftime("%d.%m.%Y") if memo.created_at else ""
+    # Дата документа — день отправки на согласование (тогда же присваивается
+    # номер); у ещё не отправленного — день создания. По местному времени.
+    dated = to_local(getattr(memo, "submitted_at", None) or memo.created_at)
+    created = dated.strftime("%d.%m.%Y") if dated else ""
     head = Table(
         [[
             Paragraph("СЛУЖЕБНАЯ ЗАПИСКА", st["title"]),
         ], [
             Paragraph(
-                f"№ {memo.number or 'без номера'} от {created}", st["small"]
+                f"№ {_text(memo.number or 'без номера')} от {created}", st["small"]
             ),
         ]],
         colWidths=[170 * mm],
     )
     head.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER")]))
 
-    flow = [head, Spacer(1, 6 * mm), Paragraph(memo.title, st["h2"])]
+    flow = [head, Spacer(1, 6 * mm), Paragraph(_text(memo.title), st["h2"])]
 
-    labels = _field_labels(template_schema)
-    body = memo.body or {}
-    if body:
+    # Те же подписи, порядок и вид значений, что на экране: их отдаёт одна
+    # функция, поэтому документ и предпросмотр не расходятся.
+    fields = label_fields(memo.body, template_schema)
+    if fields:
         rows = [[
             Paragraph("Показатель", st["cell_bold"]),
             Paragraph("Значение", st["cell_bold"]),
         ]]
-        for key, value in body.items():
+        for field in fields:
             rows.append([
-                Paragraph(labels.get(key, key), st["cell"]),
-                Paragraph(_fmt(value), st["cell"]),
+                Paragraph(_text(field["label"]), st["cell"]),
+                Paragraph(_text(field["display"]), st["cell"]),
             ])
 
         table = Table(rows, colWidths=[60 * mm, 110 * mm])
@@ -180,8 +187,8 @@ def _memo_flowables(*, memo, author, template_schema: dict | None, st: dict) -> 
     flow += [
         Spacer(1, 8 * mm),
         Paragraph(
-            f"Автор: {author.full_name}"
-            + (f", {author.position}" if author.position else ""),
+            f"Автор: {_text(author.full_name)}"
+            + (f", {_text(author.position)}" if author.position else ""),
             st["body"],
         ),
     ]
@@ -205,17 +212,17 @@ def _sheet_flowables(*, memo, rows: list[dict], st: dict) -> list:
     ]]
 
     for row in rows:
-        decided = row.get("decided_at")
+        decided = to_local(row.get("decided_at"))
         table_rows.append([
             Paragraph(str(row.get("order_no", "")), st["cell"]),
-            Paragraph(_fmt(row.get("signer_name") or row.get("signer_email")), st["cell"]),
-            Paragraph(_fmt(row.get("signer_position")), st["cell"]),
+            Paragraph(_text(row.get("signer_name") or row.get("signer_email")), st["cell"]),
+            Paragraph(_text(row.get("signer_position")), st["cell"]),
             Paragraph(DECISION_LABEL.get(row.get("status"), _fmt(row.get("status"))), st["cell"]),
             Paragraph(
                 decided.strftime("%d.%m.%Y %H:%M") if isinstance(decided, datetime) else "—",
                 st["cell"],
             ),
-            Paragraph(_fmt(row.get("comment")), st["cell"]),
+            Paragraph(_text(row.get("comment")), st["cell"]),
         ])
 
     table = Table(
@@ -238,7 +245,8 @@ def _sheet_flowables(*, memo, rows: list[dict], st: dict) -> list:
     note = Paragraph(
         "Документ согласован в информационной системе SignFlow простой "
         "электронной подписью. Решения зафиксированы в журнале аудита "
-        "с указанием времени и сетевого адреса. Хеш подписанного файла "
+        f"с указанием времени и сетевого адреса. Время указано в поясе {timezone_label()}. "
+        "Хеш подписанного файла "
         f"(SHA-256): {memo.file_hash or '—'}",
         st["small"],
     )
@@ -247,7 +255,7 @@ def _sheet_flowables(*, memo, rows: list[dict], st: dict) -> list:
         PageBreak(),
         Paragraph("ЛИСТ СОГЛАСОВАНИЯ", st["title"]),
         Paragraph(
-            f"к служебной записке № {memo.number or 'без номера'} — {memo.title}",
+            f"к служебной записке № {_text(memo.number or 'без номера')} — {_text(memo.title)}",
             st["small"],
         ),
         Spacer(1, 5 * mm),

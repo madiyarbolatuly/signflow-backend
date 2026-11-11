@@ -1,10 +1,22 @@
 """Схемы запросов и ответов."""
 
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
 
 from app.db.enums import GroupPolicy
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+#: Момент времени в ответе API — всегда с поясом. SQLite при чтении пояс
+#: теряет, и значение уходило клиенту «голым»; браузер принимал его за
+#: местное время и сдвигал дату. PostgreSQL пояс хранит, там это не
+#: проявлялось — то есть разработка и эксплуатация показывали разное.
+Moment = Annotated[datetime, AfterValidator(_as_utc)]
 
 
 # ─── авторизация ─────────────────────────────────────────────────────────────
@@ -81,7 +93,7 @@ class StepOut(BaseModel):
     signer_position: str | None = None
     status: str
     comment: str | None = None
-    decided_at: datetime | None = None
+    decided_at: Moment | None = None
 
 
 class GroupOut(BaseModel):
@@ -110,9 +122,9 @@ class MemoOut(BaseModel):
     status: str
     author_id: str
     body: dict
-    created_at: datetime
-    submitted_at: datetime | None = None
-    completed_at: datetime | None = None
+    created_at: Moment
+    submitted_at: Moment | None = None
+    completed_at: Moment | None = None
 
 
 class BodyField(BaseModel):
@@ -120,11 +132,20 @@ class BodyField(BaseModel):
 
     name: str
     label: str
+    #: Тип из схемы шаблона; у записки без шаблона его нет.
+    type: str | None = None
     value: object = None
+    #: Значение в привычном человеку виде: дата `01.12.2026`, число с
+    #: разрядами. Формируется на сервере, тем же кодом, что и PDF.
+    display: str = ""
 
 
 class MemoDetailOut(MemoOut):
     route: RouteOut | None = None
+    #: Нужны листу предпросмотра: в документе стоит подпись автора, а не
+    #: его идентификатор.
+    author_name: str | None = None
+    author_position: str | None = None
     fields: list[BodyField] = Field(default_factory=list)
 
 
@@ -158,10 +179,12 @@ class PublicMemoOut(BaseModel):
     title: str
     body: dict
     author_name: str
-    created_at: datetime
+    author_position: str | None = None
+    created_at: Moment
+    submitted_at: Moment | None = None
     signer_name: str | None = None
     signer_position: str | None = None
-    expires_at: datetime | None = None
+    expires_at: Moment | None = None
     attachments: list[PublicAttachmentOut] = Field(default_factory=list)
     fields: list[BodyField] = Field(default_factory=list)
 

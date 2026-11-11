@@ -12,6 +12,7 @@ from app.core.security import file_digest
 from app.db.enums import MemoStatus
 from app.db.tables import ApprovalGroup, ApprovalRoute, ApprovalStep, Memo, MemoTemplate, User
 from app.services import pdf, storage
+from app.services.formatting import label_fields
 
 
 async def _template_schema(session: AsyncSession, memo: Memo) -> dict | None:
@@ -49,29 +50,12 @@ async def _sheet_rows(session: AsyncSession, memo: Memo) -> list[dict]:
 
 async def labeled_body(session: AsyncSession, memo: Memo) -> list[dict]:
     """
-    Поля записки с человеческими подписями из схемы шаблона.
+    Поля записки с подписями из схемы шаблона и готовым к показу значением.
 
-    Одна точка правды для PDF, карточки автора и страницы подписания: иначе
-    в документе поле называется «Программа обучения», а на экране — `program`.
-    Поля, которых нет в схеме (записка без шаблона или шаблон изменили после
-    отправки), показываются под своим ключом, а не скрываются.
+    Сама подстановка живёт в `formatting.label_fields` — ту же функцию
+    вызывает генератор PDF, поэтому документ и экран не расходятся.
     """
-    schema = await _template_schema(session, memo)
-    labels = {
-        f.get("name"): f.get("label", f.get("name", ""))
-        for f in (schema or {}).get("fields", [])
-        if f.get("name")
-    }
-    order = list(labels.keys())
-
-    def rank(name: str) -> tuple[int, int]:
-        # Порядок полей задаёт шаблон; «лишние» уходят в конец.
-        return (0, order.index(name)) if name in order else (1, 0)
-
-    return [
-        {"name": name, "label": labels.get(name, name), "value": value}
-        for name, value in sorted((memo.body or {}).items(), key=lambda kv: rank(kv[0]))
-    ]
+    return label_fields(memo.body, await _template_schema(session, memo))
 
 
 async def build_memo_pdf(session: AsyncSession, memo: Memo) -> str:

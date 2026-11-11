@@ -21,6 +21,9 @@ PyJWT>=2.10
 bcrypt>=4.2
 python-multipart>=0.0.18
 python-ulid>=3.0
+# База часовых поясов для zoneinfo. В Windows и в slim-образах Docker системной
+# базы нет, и ZoneInfo("Asia/Almaty") без этого пакета не находится.
+tzdata>=2024.2
 reportlab>=4.2
 
 # Тесты

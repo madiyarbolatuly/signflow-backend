@@ -62,7 +62,9 @@ async def open_for_signing(token: str, session: SessionDep) -> PublicMemoOut:
         title=memo.title,
         body=memo.body,
         author_name=author.full_name,
+        author_position=author.position,
         created_at=memo.created_at,
+        submitted_at=memo.submitted_at,
         signer_name=step.signer_name,
         signer_position=step.signer_position,
         expires_at=step.token_expires_at,
@@ -71,6 +73,33 @@ async def open_for_signing(token: str, session: SessionDep) -> PublicMemoOut:
             for a in attachments
         ],
         fields=await documents.labeled_body(session, memo),
+    )
+
+
+@router.get("/sign/{token}/pdf")
+async def memo_pdf_by_link(token: str, session: SessionDep) -> FileResponse:
+    """
+    Сам документ по ссылке подписания.
+
+    Подписант должен видеть ровно тот файл, хеш которого сохранит его
+    подпись, а не пересказ полей на странице. После решения ссылка гаснет
+    вместе с этим адресом: `resolve_sign_token` проверяется на каждый запрос.
+    """
+    step = await approval.resolve_sign_token(session, token)
+    memo, _author = await _memo_for_step(session, step)
+
+    if not memo.pdf_path:
+        raise http_404("Файл документа не сформирован")
+    path = storage.resolve_within_storage(memo.pdf_path)
+    if not path.is_file():
+        raise http_404("Файл отсутствует в хранилище")
+
+    # inline: браузер открывает документ, а не сохраняет — на телефоне это
+    # разница между «посмотрел и подписал» и «ищи файл в загрузках».
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline"},
     )
 
 

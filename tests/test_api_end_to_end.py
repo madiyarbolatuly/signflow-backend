@@ -126,6 +126,19 @@ async def test_full_cycle_from_login_to_signature(api):
     assert public["author_name"] == "Автор Служебки"
     assert "id" not in public, "держателю ссылки внутренние идентификаторы не нужны"
 
+    # Поля приходят уже с подписью и в читаемом виде.
+    assert public["fields"] == [
+        {"name": "days", "label": "days", "type": None, "value": 5, "display": "5"}
+    ]
+
+    # ─── подписант видит сам документ, а не пересказ полей ───────────────────
+    resp = await client.get(f"{PREFIX}/public/sign/{token}/pdf")
+    assert resp.status_code == 200, resp.text
+    assert resp.content.startswith(b"%PDF-")
+    assert resp.headers["content-disposition"].startswith("inline"), (
+        "документ должен открываться в браузере, а не уходить в загрузки"
+    )
+
     # ─── решение ─────────────────────────────────────────────────────────────
     resp = await client.post(
         f"{PREFIX}/public/sign/{token}/decide",
@@ -143,6 +156,17 @@ async def test_full_cycle_from_login_to_signature(api):
         f"{PREFIX}/public/sign/{token}/decide", json={"approve": True}
     )
     assert resp.status_code == 410, "повторно подписать по той же ссылке нельзя"
+
+    resp = await client.get(f"{PREFIX}/public/sign/{token}/pdf")
+    assert resp.status_code == 410, "документ по погашенной ссылке больше не отдаётся"
+
+    # Автору тот же документ доступен под его учётной записью.
+    resp = await client.get(f"{PREFIX}/memos/{memo_id}/pdf", headers=headers)
+    assert resp.status_code == 200
+    assert resp.content.startswith(b"%PDF-")
+
+    resp = await client.get(f"{PREFIX}/memos/{memo_id}/pdf")
+    assert resp.status_code == 401, "без токена документ не отдаётся"
 
     # ─── итоговое состояние ──────────────────────────────────────────────────
     resp = await client.get(f"{PREFIX}/memos/{memo_id}", headers=headers)

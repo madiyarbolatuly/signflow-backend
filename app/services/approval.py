@@ -27,6 +27,7 @@ from ulid import ULID
 from app.core.config import settings
 from app.core.exceptions import http_400, http_403, http_409, http_410
 from app.core.security import new_sign_token
+from app.services.formatting import to_local
 from app.db.enums import (
     GroupPolicy,
     GroupStatus,
@@ -277,7 +278,7 @@ async def _activate_group(
                     f"Автор: {memo.author_id}\n\n"
                     f"Открыть и принять решение: {link}\n\n"
                     f"Ссылка одноразовая и действует до "
-                    f"{expires.strftime('%d.%m.%Y')}."
+                    f"{to_local(expires).strftime('%d.%m.%Y')}."
                 ),
             )
         )

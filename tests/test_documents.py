@@ -12,13 +12,6 @@ from app.db.tables import ApprovalGroup, ApprovalStep, MemoTemplate
 from app.services import approval, documents, pdf, storage
 
 
-@pytest.fixture(autouse=True)
-def storage_in_tmp(tmp_path, monkeypatch):
-    """Хранилище на время теста — временный каталог, а не рабочая папка."""
-    monkeypatch.setattr(storage.settings, "storage_path", str(tmp_path / "storage"))
-    return tmp_path
-
-
 def test_cyrillic_font_is_available():
     """
     Без TrueType-шрифта русский текст в PDF выходит набором точек: встроенные

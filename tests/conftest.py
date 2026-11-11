@@ -11,6 +11,7 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-at-least-16-chars")
 os.environ.setdefault("DATABASE_URL_OVERRIDE", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("MAIL_DRY_RUN", "true")
 
+import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402
     AsyncSession,
@@ -21,6 +22,22 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.enums import UserRole  # noqa: E402
 from app.db.tables import Memo, User  # noqa: E402
+from app.services import storage  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def storage_in_tmp(tmp_path, monkeypatch):
+    """
+    Хранилище на время теста — временный каталог.
+
+    Для всех тестов без исключения. Раньше изоляция стояла только в
+    test_documents.py, а сквозной тест API писал в рабочее `./storage`:
+    номера записок в тестовой базе начинаются с единицы, поэтому прогон
+    `pytest` затирал `storage/memos/1/memo.pdf` настоящей записки №1 чужим
+    документом — и её сохранённый хеш переставал совпадать с файлом.
+    """
+    monkeypatch.setattr(storage.settings, "storage_path", str(tmp_path / "storage"))
+    return tmp_path
 
 
 @pytest_asyncio.fixture
