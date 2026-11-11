@@ -34,10 +34,20 @@ def _send_sync(to: str, subject: str, body: str) -> None:
     message.set_content(body)
 
     context = ssl.create_default_context()
-    with smtplib.SMTP(settings.smtp_server, settings.smtp_port, timeout=20) as server:
+    # Порт 465 — шифрование с первого байта (SMTPS); 587 и прочие —
+    # обычное соединение, переводимое в шифрованное командой STARTTLS.
+    # STARTTLS на 465 не работает: сервер ждёт TLS-рукопожатия и молчит.
+    if settings.smtp_port == 465:
+        server = smtplib.SMTP_SSL(
+            settings.smtp_server, settings.smtp_port, timeout=20, context=context
+        )
+    else:
+        server = smtplib.SMTP(settings.smtp_server, settings.smtp_port, timeout=20)
+    with server:
         server.ehlo()
-        server.starttls(context=context)
-        server.ehlo()
+        if settings.smtp_port != 465:
+            server.starttls(context=context)
+            server.ehlo()
         if settings.smtp_user:
             server.login(settings.smtp_user, settings.smtp_password)
         server.send_message(message)
@@ -57,6 +67,11 @@ async def send_one(to: str, subject: str, body: str) -> bool:
     if settings.mail_dry_run or not settings.smtp_server:
         logger.info("[dry-run] письмо для %s: %s", to, subject)
         return True
+
+    allowlist = settings.mail_allowlist
+    if allowlist and to.strip().lower() not in allowlist:
+        logger.info("[не в списке разрешённых] письмо для %s не отправлено: %s", to, subject)
+        return False
 
     for attempt in range(1, _ATTEMPTS + 1):
         try:

@@ -68,6 +68,21 @@ class Settings(BaseSettings):
     #: разработки и тестов.
     mail_dry_run: bool = True
 
+    #: Если задан — письма уходят только на эти адреса (через запятую), а
+    #: остальные лишь пишутся в журнал. Для проверки почты на базе с
+    #: настоящими сотрудниками: включить отправку и не написать коллегам,
+    #: оказавшимся в тестовом маршруте. Пусто — ограничений нет.
+    mail_allowed_recipients: str = ""
+
+    @computed_field
+    @property
+    def mail_allowlist(self) -> set[str]:
+        return {
+            a.strip().lower()
+            for a in self.mail_allowed_recipients.split(",")
+            if a.strip()
+        }
+
     # ─── файловое хранилище ──────────────────────────────────────────────────
     storage_path: str = "./storage"
 
