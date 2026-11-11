@@ -64,13 +64,18 @@ async def send_one(to: str, subject: str, body: str) -> bool:
         logger.warning("Письмо без получателя пропущено: %s", subject)
         return False
 
+    # Каждое письмо оставляет в журнале одну строку с исходом. Раньше
+    # успешная отправка не писала ничего, а заблокированная — незаметную
+    # строку, и на вопрос «почему не пришло письмо» журнал не отвечал.
     if settings.mail_dry_run or not settings.smtp_server:
-        logger.info("[dry-run] письмо для %s: %s", to, subject)
+        logger.info("ПОЧТА не отправлено (тестовый режим, MAIL_DRY_RUN) → %s: %s", to, subject)
         return True
 
     allowlist = settings.mail_allowlist
     if allowlist and to.strip().lower() not in allowlist:
-        logger.info("[не в списке разрешённых] письмо для %s не отправлено: %s", to, subject)
+        logger.warning(
+            "ПОЧТА не отправлено (адреса нет в MAIL_ALLOWED_RECIPIENTS) → %s: %s", to, subject
+        )
         return False
 
     for attempt in range(1, _ATTEMPTS + 1):
@@ -78,6 +83,7 @@ async def send_one(to: str, subject: str, body: str) -> bool:
             # Блокирующий smtplib уводится с цикла событий, иначе он
             # останавливает обработку всех остальных запросов.
             await asyncio.to_thread(_send_sync, to, subject, body)
+            logger.info("ПОЧТА отправлено → %s: %s", to, subject)
             return True
         except Exception as exc:  # noqa: BLE001 — журналируем любую причину
             logger.warning(
@@ -92,6 +98,27 @@ async def send_one(to: str, subject: str, body: str) -> bool:
 
     logger.error("Письмо для %s не доставлено: %s", to, subject)
     return False
+
+
+def describe_mode() -> str:
+    """Режим почты одной строкой — печатается при запуске сервера."""
+    if settings.mail_dry_run:
+        return "ПОЧТА: тестовый режим (MAIL_DRY_RUN=true) — письма только пишутся в журнал"
+    if not settings.smtp_server:
+        return "ПОЧТА: SMTP_SERVER не задан — письма только пишутся в журнал"
+    if not settings.smtp_password and settings.smtp_user:
+        return (
+            f"ПОЧТА: {settings.smtp_server}:{settings.smtp_port} — "
+            "SMTP_PASSWORD пуст, сервер не примет вход"
+        )
+    allowlist = settings.mail_allowlist
+    limit = (
+        f"только на: {', '.join(sorted(allowlist))}" if allowlist else "на любые адреса"
+    )
+    return (
+        f"ПОЧТА: отправка через {settings.smtp_server}:{settings.smtp_port} "
+        f"от {settings.mail_from}, {limit}"
+    )
 
 
 async def send_outbox(items: list[OutboxItem], *, author_email: str | None = None) -> None:
