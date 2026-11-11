@@ -37,6 +37,16 @@ def _by_code(code: str) -> dict:
 
 
 # ─── сами шаблоны ────────────────────────────────────────────────────────────
+def test_addressee_matches_company_requisites():
+    """Реквизиты ТОО «AI System Group»: генеральный директор Кашабаева А. Т."""
+    assert ADDRESSEE == [
+        "Генеральному директору",
+        "ТОО «AI System Group»",
+        "г-же Кашабаевой А. Т.",
+    ]
+    assert all(t["body_schema"]["addressee"] == ADDRESSEE for t in TEMPLATES)
+
+
 def test_exactly_the_three_requested_templates():
     assert [t["code"] for t in TEMPLATES] == ["hiring", "annual_leave", "dismissal"]
 
