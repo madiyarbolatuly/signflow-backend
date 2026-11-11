@@ -341,7 +341,7 @@ async def test_dismissal_statement_from_preview_to_signed_pdf(api):
     )
     assert resp.json()["document"]["paragraphs"] == [
         "Прошу Вас расторгнуть со мной трудовой договор по собственному желанию "
-        "15 декабря 2026 года."
+        "«15» декабря 2026 года."
     ]
 
     # ─── отправка ────────────────────────────────────────────────────────────
@@ -364,7 +364,7 @@ async def test_dismissal_statement_from_preview_to_signed_pdf(api):
     assert document["addressee"] == ["Директору", "ТОО «GQ-Group Invest»"], (
         "адресат, заданный в записке, важнее адресата шаблона"
     )
-    assert "15 декабря 2026 года" in document["paragraphs"][0]
+    assert "«15» декабря 2026 года" in document["paragraphs"][0]
 
     # ─── подписант видит тот же документ ─────────────────────────────────────
     async with maker() as s:

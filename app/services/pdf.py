@@ -18,7 +18,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
@@ -110,6 +110,9 @@ def _styles() -> dict:
     return {
         "text": style("SfText"),
         "right": style("SfRight", alignment=TA_LEFT),
+        # Шапка бланка — кому, «от», подписи полей — набрана полужирным.
+        "head": style("SfHead", fontName=bold, alignment=TA_LEFT),
+        "date_right": style("SfDateRight", alignment=TA_RIGHT),
         "title": style("SfTitle", fontName=bold, fontSize=14, leading=18, alignment=TA_CENTER),
         "subtitle": style("SfSubtitle", fontSize=10, leading=13, alignment=TA_CENTER,
                           textColor=MUTED),
@@ -235,7 +238,7 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
     style: list = []
 
     for line in document["addressee"]:
-        rows.append([Paragraph(_text(line), st["right"]), ""])
+        rows.append([Paragraph(_text(line), st["head"]), ""])
         style.append(("SPAN", (0, len(rows) - 1), (1, len(rows) - 1)))
 
     rows.append(["", ""])  # отступ перед «от»
@@ -244,7 +247,7 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
     for index, item in enumerate(document["sender"]):
         value_row = len(rows)
         rows.append([
-            Paragraph("от" if index == 0 else "", st["right"]),
+            Paragraph("от" if index == 0 else "", st["head"]),
             Paragraph(_text(item["value"]), st["right"]),
         ])
         # Значение стоит на линии — как вписанное в бланк от руки.
@@ -256,7 +259,7 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
     for field in document["header_fields"]:
         value_row = len(rows)
         rows.append([
-            Paragraph(f"{_text(field['label'])}:", st["right"]),
+            Paragraph(f"{_text(field['label'])}:", st["head"]),
             "",
         ])
         style.append(("SPAN", (0, value_row), (1, value_row)))
@@ -280,8 +283,9 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
     for text in document["paragraphs"]:
         flow += [Paragraph(_text(text), st["paragraph"]), Spacer(1, 1.5 * mm)]
 
-    # Низ бланка: дата слева, подпись справа. Вместо строки «______
-    # (подпись)» у отправленного документа — штамп электронной подписи.
+    # Низ бланка — справа, как на бумаге: дата, под ней подпись. Вместо
+    # строки «______ (подпись)» у отправленного документа — штамп
+    # электронной подписи, у черновика — пустая строка подписи.
     if document.get("stamp"):
         signature = _stamp(document["stamp"], st)
     else:
@@ -290,13 +294,18 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
                 [Paragraph(_text(short_name(document["signer"])), st["right"])],
                 [Paragraph("(подпись)", st["caption"])],
             ],
-            [60 * mm],
+            [72 * mm],
             [("LINEBELOW", (0, 0), (0, 0), 0.6, INK),
              ("TOPPADDING", (0, 1), (0, 1), 1)],
         )
     footer = _plain_table(
-        [[Paragraph(_text(document["date"]), st["text"]), signature]],
+        [
+            ["", Paragraph(_text(document["date"]), st["date_right"])],
+            ["", ""],
+            ["", signature],
+        ],
         [CONTENT_WIDTH - 72 * mm, 72 * mm],
+        [("TOPPADDING", (0, 1), (-1, 1), 4 * mm)],
     )
     flow += [Spacer(1, 16 * mm), KeepTogether(footer)]
     return flow

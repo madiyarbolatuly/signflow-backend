@@ -109,7 +109,8 @@ _PLACEHOLDER = re.compile(r"\{([a-z_][a-z0-9_]*)(?::([^{}]+))?\}")
 
 
 def long_date(value: date) -> str:
-    return f"{value.day:02d} {_MONTHS_GENITIVE[value.month - 1]} {value.year}"
+    """«07» декабря 2026 — как дата вписывается в бланк: «___» ______ 202__."""
+    return f"«{value.day:02d}» {_MONTHS_GENITIVE[value.month - 1]} {value.year}"
 
 
 def _plural(n: int, forms: list[str]) -> str:
