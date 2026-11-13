@@ -297,45 +297,29 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
 
     font, size = st["right"].fontName, st["right"].fontSize
 
-    def lined(value: str, prefix: str = "") -> bool:
+    def lined(value: str, prefix: str = "") -> None:
         """
-        Значение на линиях бланка, как на бумаге: каждая строка на своей
-        черте, строки идут на всю ширину блока от того же края, что и «от».
-        «от» стоит только в начале первой строки, черта под ним не проходит;
-        перенос продолжается от левого края, а не под значением.
-
-        Возвращает, на всю ли ширину последняя строка — по ней центрируется
-        подпись «(должность)».
+        Значение на линиях бланка: каждая строка на своей черте, все строки —
+        после «от», под самим «от» черты нет. Перенесённая строка отстоит от
+        предыдущей так же свободно, как строки ниже, а не прижата к черте.
         """
-        text = " ".join(str(value).split())
-        first_width = line_width if prefix else block_width
-        first = (simpleSplit(text, font, size, first_width) or [""])[0]
-        lines = [first] + simpleSplit(text[len(first):].strip(), font, size, block_width)
+        lines = simpleSplit(" ".join(str(value).split()), font, size, line_width) or [""]
         for number, line in enumerate(lines):
             row = len(rows)
-            if number == 0 and prefix:
-                rows.append([Paragraph(prefix, st["head"]), Paragraph(_text(line), st["right"])])
-                style.append(("LINEBELOW", (1, row), (1, row), 0.6, INK))
-            else:
-                rows.append([Paragraph(_text(line), st["right"]), ""])
-                style.append(("SPAN", (0, row), (1, row)))
-                style.append(("LINEBELOW", (0, row), (1, row), 0.6, INK))
+            rows.append([
+                Paragraph(prefix if number == 0 else "", st["head"]),
+                Paragraph(_text(line), st["right"]),
+            ])
+            style.append(("LINEBELOW", (1, row), (1, row), 0.6, INK))
             style.append(("BOTTOMPADDING", (0, row), (-1, row), 1))
             if number:
-                style.append(("TOPPADDING", (0, row), (-1, row), 2))
-        return len(lines) > 1 or not prefix
+                style.append(("TOPPADDING", (0, row), (-1, row), 7))
 
     for index, item in enumerate(document["sender"]):
         # Значение стоит на линии — как вписанное в бланк от руки.
-        full = lined(item["value"], "от" if index == 0 else "")
-        caption = Paragraph(f"({_text(item['caption'])})", st["caption"])
-        row = len(rows)
-        if full:
-            rows.append([caption, ""])
-            style.append(("SPAN", (0, row), (1, row)))
-        else:
-            rows.append(["", caption])
-        style.append(("BOTTOMPADDING", (0, row), (-1, row), 4))
+        lined(item["value"], "от" if index == 0 else "")
+        rows.append(["", Paragraph(f"({_text(item['caption'])})", st["caption"])])
+        style.append(("BOTTOMPADDING", (0, len(rows) - 1), (-1, len(rows) - 1), 4))
 
     for field in document["header_fields"]:
         value_row = len(rows)
