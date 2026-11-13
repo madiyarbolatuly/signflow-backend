@@ -12,6 +12,7 @@ from fastapi import APIRouter
 
 from app.api.routes.admin import router as admin_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.companies import router as companies_router
 from app.api.routes.memos import router as memos_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.public_sign import router as public_sign_router
@@ -21,6 +22,7 @@ router = APIRouter()
 router.include_router(auth_router, prefix="/auth")
 router.include_router(memos_router, prefix="/memos")
 router.include_router(admin_router, prefix="/admin")
+router.include_router(companies_router, prefix="/companies")
 router.include_router(notifications_router, prefix="/notifications")
 # Без авторизации: доступ только по одноразовому токену.
 router.include_router(public_sign_router, prefix="/public")

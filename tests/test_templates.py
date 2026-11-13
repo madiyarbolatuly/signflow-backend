@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db.tables import MemoTemplate
-from app.scripts.seed import ADDRESSEE, RETIRED_CODES, TEMPLATES, apply_templates
+from app.scripts.seed import COMPANIES, RETIRED_CODES, TEMPLATES, apply_templates
 from app.services import pdf
 from app.services.formatting import (
     GAP,
@@ -29,7 +29,26 @@ SAMPLE = {
     "date_from": "2026-12-01",
     "days": "14",
     "dismissal_date": "2026-12-15",
+    "amount": "150000",
+    "month": "2026-11",
+    "account_holder": "Иванова Ивана Ивановича",
+    "iban": "KZ4496503F0009018647",
+    "until": "2027-06-30",
+    "reason": "открытием нового счёта",
+    "period_from": "2026-10-01",
+    "period_to": "2026-10-31",
+    "child_name": "Иванова Алихана Ивановича",
+    "return_date": "2027-02-01",
+    "day_mode": "неполной",
+    "text": "Прошу рассмотреть возможность приобретения печатей.\nПрошу выделить средства.",
+    "items": "ноутбук Lenovo, инв. № 0042",
 }
+
+#: Компания в том виде, в каком её получает `compose_document`.
+AISG = {"id": 1, **{k: v for k, v in COMPANIES[0].items() if k != "code"}}
+
+#: Подстановки, которые заполняет система, а не автор.
+SYSTEM_PLACEHOLDERS = {"company"}
 
 
 def _by_code(code: str) -> dict:
@@ -39,22 +58,32 @@ def _by_code(code: str) -> dict:
 # ─── сами шаблоны ────────────────────────────────────────────────────────────
 def test_addressee_matches_company_requisites():
     """Реквизиты ТОО «AI System Group»: генеральный директор Кашабаева А. Т."""
-    assert ADDRESSEE == [
+    assert AISG["addressee"] == [
         "Генеральному директору",
         "ТОО «AI System Group»",
         "А. Кашабаевой",
     ]
-    assert all(t["body_schema"]["addressee"] == ADDRESSEE for t in TEMPLATES)
+    assert AISG["bin"] == "190740026451"
+    # Адресат теперь у компании. В схеме он остался только у трёх первых
+    # шаблонов — для документов, созданных до выбора компании.
+    with_legacy = [t["code"] for t in TEMPLATES if "addressee" in t["body_schema"]]
+    assert with_legacy == ["hiring", "annual_leave", "dismissal"]
+    assert all(t["body_schema"]["addressee"] == AISG["addressee"]
+               for t in TEMPLATES if t["code"] in with_legacy)
 
 
-def test_exactly_the_three_requested_templates():
-    assert [t["code"] for t in TEMPLATES] == ["hiring", "annual_leave", "dismissal"]
+def test_templates_from_the_paper_forms():
+    assert [t["code"] for t in TEMPLATES] == [
+        "hiring", "annual_leave", "dismissal",
+        "advance", "salary_account", "deduction_card", "tax_deduction",
+        "childcare_leave", "childcare_return", "memo_free", "memo_deduction",
+    ]
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda t: t["code"])
 def test_text_refers_only_to_declared_fields(template):
     declared = {f["name"] for f in template["body_schema"]["fields"]}
-    used = placeholders(template["text_template"])
+    used = placeholders(template["text_template"]) - SYSTEM_PLACEHOLDERS
     assert used <= declared, f"в тексте поля без объявления: {used - declared}"
 
 
@@ -62,6 +91,7 @@ def test_text_refers_only_to_declared_fields(template):
 def test_filled_template_has_no_gaps_or_raw_placeholders(template):
     schema = template["body_schema"]
     body = {f["name"]: SAMPLE[f["name"]] for f in schema["fields"]}
+    body["company"] = AISG["name"]
     text = " ".join(render_text(template["text_template"], body, schema))
     assert GAP not in text
     assert "{" not in text and "}" not in text
@@ -135,8 +165,10 @@ def test_unknown_placeholder_becomes_a_gap_not_a_crash():
     assert render_text("Срок {nonexistent}.", {}, None) == [f"Срок {GAP}."]
 
 
-def test_paragraphs_split_on_blank_lines():
+def test_paragraphs_split_on_lines():
     assert render_text("Первый.\n\nВторой.", {}, None) == ["Первый.", "Второй."]
+    # Свободный текст записки: новый абзац — один Enter.
+    assert render_text("{text}", {"text": "Один.\nДва."}, None) == ["Один.", "Два."]
 
 
 # ─── документ ────────────────────────────────────────────────────────────────
@@ -150,9 +182,12 @@ def test_document_follows_the_paper_layout():
         author_name="Иванов Иван Иванович",
         author_position="менеджер склада",
         dated=datetime(2026, 11, 10, 21, 0, tzinfo=timezone.utc),
+        company=AISG,
     )
     assert doc["kind"] == "letter"
-    assert doc["addressee"] == ADDRESSEE
+    assert doc["addressee"] == AISG["addressee"]
+    assert doc["letterhead"]["ru"][0] == "ТОО «AI System Group»"
+    assert doc["letterhead"]["has_logo"]
     assert doc["sender"] == [
         {"value": "менеджер склада", "caption": "должность"},
         {"value": "Иванов Иван Иванович", "caption": "ФИО"},
@@ -212,7 +247,7 @@ def test_letter_pdf_builds(template):
     doc = compose_document(
         schema=template["body_schema"], text_template=template["text_template"],
         body=SAMPLE, addressee=None, author_name="Иванов <И.> & Ко",
-        author_position="менеджер", dated=date(2026, 11, 11),
+        author_position="менеджер", dated=date(2026, 11, 11), company=AISG,
     )
     data = pdf.render(memo=memo, author=None, document=doc)
     assert data.startswith(b"%PDF-")
@@ -226,7 +261,7 @@ async def test_seed_creates_updates_and_retires(session):
     await session.flush()
 
     first = await apply_templates(session)
-    assert sum("создан" in line for line in first) == 3
+    assert sum("создан" in line for line in first) == len(TEMPLATES)
     assert any("выключен" in line for line in first)
 
     active = (
@@ -234,7 +269,7 @@ async def test_seed_creates_updates_and_retires(session):
             select(MemoTemplate.code).where(MemoTemplate.is_active.is_(True))
         )
     ).scalars().all()
-    assert sorted(active) == ["annual_leave", "dismissal", "hiring"]
+    assert sorted(active) == sorted(t["code"] for t in TEMPLATES)
 
     # Выведенный шаблон не удалён: на него ссылаются старые записки.
     retired = (

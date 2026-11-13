@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import file_digest
 from app.db.enums import MemoStatus
 from app.db.tables import ApprovalGroup, ApprovalRoute, ApprovalStep, Memo, MemoTemplate, User
-from app.services import pdf, storage
+from app.services import companies, pdf, storage
 from app.services.formatting import compose_document, label_fields
 
 
@@ -88,6 +88,7 @@ async def memo_document(session: AsyncSession, memo: Memo) -> dict | None:
         author_position=author.position if author else None,
         dated=memo.submitted_at or memo.created_at,
         submitted_at=memo.submitted_at,
+        company=companies.as_dict(await companies.get(session, memo.company_id)),
     )
 
 

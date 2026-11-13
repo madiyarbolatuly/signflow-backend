@@ -99,6 +99,48 @@ class User(Base):
     __table_args__ = (_in("role", UserRole.ALL),)
 
 
+class Company(Base):
+    """
+    Юрлицо группы — от его имени оформляется документ.
+
+    Сотрудники работают в нескольких компаниях (отдел в справочнике назван
+    «Отдел (Компания)»), и у каждой свой фирменный бланк и свой директор.
+    Отсюда берутся шапка бланка и адресат «Кому» по умолчанию.
+    """
+
+    __tablename__ = "companies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    #: Полное наименование: «ТОО «AI System Group»».
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Как компания записана в названии отдела: «AI System Group».
+    short_name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    bin: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    legal_address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    actual_address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    iban: Mapped[str | None] = mapped_column(String(34), nullable=True)
+    bank: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bik: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    kbe: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    director_position: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    director_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    #: «Кому» по строкам, в дательном падеже: «Генеральному директору»,
+    #: «ТОО «AI System Group»», «А. Кашабаевой».
+    addressee: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    #: Фирменная шапка бланка — английский и русский столбцы по строкам.
+    letterhead_en: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    letterhead_ru: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    #: Файл логотипа в `app/assets/letterheads/` (PNG с прозрачным фоном —
+    #: на тёмной теме экрана не будет белого прямоугольника).
+    logo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = created_at_column()
+
+
 # ─── служебные записки ───────────────────────────────────────────────────────
 class MemoTemplate(Base):
     __tablename__ = "memo_templates"
@@ -143,6 +185,12 @@ class Memo(Base):
 
     #: «Кому» в шапке документа. Свободный текст: должность и ФИО адресата.
     addressee: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    #: Компания, на чьём бланке документ. NULL — документ создан до появления
+    #: выбора компании и печатается без фирменной шапки, как был подписан.
+    company_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=True
+    )
 
     #: Маршрут, который автор собрал для черновика. Настоящий маршрут
     #: (`approval_routes`) создаётся только при отправке; до неё задуманное

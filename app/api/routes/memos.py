@@ -11,7 +11,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import ClientInfo, CurrentUser, SessionDep
-from app.core.exceptions import http_403, http_404, http_409
+from app.core.exceptions import http_400, http_403, http_404, http_409
 from app.core.security import file_digest
 from app.db.enums import MemoStatus, SignMethod, StepStatus
 from app.db.tables import (
@@ -19,10 +19,11 @@ from app.db.tables import (
     ApprovalRoute,
     ApprovalStep,
     Attachment,
+    Company,
     Memo,
+    MemoTemplate,
     User,
 )
-from app.db.tables import MemoTemplate
 from app.schemas import (
     AttachmentOut,
     DecisionRequest,
@@ -34,8 +35,8 @@ from app.schemas import (
     RenderRequest,
     SubmitRequest,
 )
-from app.services import approval, documents, storage
-from app.services.formatting import compose_document, preview_fields
+from app.services import approval, companies, documents, storage
+from app.services.formatting import body_errors, compose_document, preview_fields
 from app.services.mail import send_outbox
 
 #: Предел размера вложения. Без него один запрос способен занять диск.
@@ -55,14 +56,49 @@ async def _get_own_memo(session, memo_id: int, user: User) -> Memo:
     return memo
 
 
+async def _load_template(session, template_id: int | None) -> MemoTemplate | None:
+    if template_id is None:
+        return None
+    template = (
+        await session.execute(select(MemoTemplate).where(MemoTemplate.id == template_id))
+    ).scalar_one_or_none()
+    if template is None:
+        raise http_404("Шаблон не найден")
+    return template
+
+
+async def _pick_company(session, company_id: int | None, user: User) -> Company | None:
+    """
+    Компания документа: выбранная автором, иначе компания из его отдела.
+    Пустой справочник — документ без фирменной шапки.
+    """
+    if company_id is not None:
+        company = await companies.get(session, company_id)
+        if company is None or not company.is_active:
+            raise http_404("Компания не найдена")
+        return company
+    return await companies.default_for(session, user, await companies.active(session))
+
+
+def _check_body(body: dict | None, template: MemoTemplate | None) -> None:
+    """Формат полей (IBAN, сумма) проверяется и на сервере, не только в форме."""
+    errors = body_errors(body, template.body_schema if template else None)
+    if errors:
+        raise http_400("; ".join(errors))
+
+
 @router.post("", response_model=MemoOut, status_code=status.HTTP_201_CREATED)
 async def create_memo(data: MemoCreate, session: SessionDep, user: CurrentUser) -> Memo:
+    template = await _load_template(session, data.template_id)
+    _check_body(data.body, template)
+    company = await _pick_company(session, data.company_id, user)
     memo = Memo(
         author_id=user.id,
         template_id=data.template_id,
         title=data.title,
         body=data.body,
         addressee=(data.addressee or "").strip() or None,
+        company_id=company.id if company else None,
         status=MemoStatus.draft,
     )
     session.add(memo)
@@ -81,9 +117,12 @@ async def update_memo(
     if data.title is not None:
         memo.title = data.title
     if data.body is not None:
+        _check_body(data.body, await _load_template(session, memo.template_id))
         memo.body = data.body
     if data.addressee is not None:
         memo.addressee = data.addressee.strip() or None
+    if data.company_id is not None:
+        memo.company_id = (await _pick_company(session, data.company_id, user)).id
     await session.flush()
     return memo
 
@@ -99,15 +138,8 @@ async def render_preview(
     форматирования на клиенте: копия рано или поздно разошлась бы с
     документом.
     """
-    template = None
-    if data.template_id is not None:
-        template = (
-            await session.execute(
-                select(MemoTemplate).where(MemoTemplate.id == data.template_id)
-            )
-        ).scalar_one_or_none()
-        if template is None:
-            raise http_404("Шаблон не найден")
+    template = await _load_template(session, data.template_id)
+    company = await _pick_company(session, data.company_id, user)
 
     schema = template.body_schema if template else None
     return {
@@ -120,6 +152,7 @@ async def render_preview(
             author_name=user.full_name,
             author_position=user.position,
             dated=datetime.now(timezone.utc),
+            company=companies.as_dict(company),
         ),
     }
 
@@ -134,6 +167,20 @@ async def submit_memo(
 ) -> dict:
     """Запускает маршрут согласования и рассылает задания первого уровня."""
     memo = await _get_own_memo(session, memo_id, user)
+
+    template = await _load_template(session, memo.template_id)
+    _check_body(memo.body, template)
+    # Бланк требует приложить документ — «Копию свидетельства о рождении
+    # прилагаю». Без вложения такое заявление кадры вернут.
+    required = (template.body_schema or {}).get("required_attachment") if template else None
+    if required:
+        has_files = (
+            await session.execute(
+                select(Attachment.id).where(Attachment.memo_id == memo.id).limit(1)
+            )
+        ).scalar_one_or_none()
+        if has_files is None:
+            raise http_400(f"Приложите файл: {required}")
 
     spec = [
         {

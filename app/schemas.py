@@ -46,14 +46,17 @@ class MemoCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     template_id: int | None = None
     body: dict = Field(default_factory=dict)
-    #: «Кому» построчно. Пусто — берётся адресат из шаблона.
+    #: «Кому» построчно. Пусто — берётся адресат компании или шаблона.
     addressee: str | None = Field(default=None, max_length=500)
+    #: Компания, на чьём бланке документ.
+    company_id: int | None = None
 
 
 class MemoUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=500)
     body: dict | None = None
     addressee: str | None = Field(default=None, max_length=500)
+    company_id: int | None = None
 
 
 class RenderRequest(BaseModel):
@@ -62,6 +65,22 @@ class RenderRequest(BaseModel):
     template_id: int | None = None
     body: dict = Field(default_factory=dict)
     addressee: str | None = Field(default=None, max_length=500)
+    company_id: int | None = None
+
+
+# ─── компании ────────────────────────────────────────────────────────────────
+class CompanyOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    short_name: str
+    bin: str | None = None
+    director_position: str | None = None
+    director_name: str | None = None
+    addressee: list[str] = Field(default_factory=list)
+    #: Компания из отдела сотрудника — выбрана в редакторе по умолчанию.
+    is_default: bool = False
+    has_logo: bool = False
 
 
 class SignerSpec(BaseModel):
@@ -169,6 +188,15 @@ class DocumentStamp(BaseModel):
     zone: str
 
 
+class DocumentLetterhead(BaseModel):
+    """Фирменная шапка компании: английский и русский столбцы, логотип."""
+
+    company_id: int | None = None
+    en: list[str] = Field(default_factory=list)
+    ru: list[str] = Field(default_factory=list)
+    has_logo: bool = False
+
+
 class DocumentOut(BaseModel):
     """
     Документ в виде бумажного бланка — то же, что печатается в PDF.
@@ -178,6 +206,7 @@ class DocumentOut(BaseModel):
     """
 
     kind: str
+    letterhead: DocumentLetterhead | None = None
     addressee: list[str]
     sender: list[DocumentSender]
     header_fields: list[DocumentHeaderField]
@@ -191,6 +220,8 @@ class DocumentOut(BaseModel):
 class PreviewField(BodyField):
     #: Обязательное поле ещё не заполнено.
     missing: bool = False
+    #: Значение не того формата (IBAN, сумма) — текст ошибки.
+    error: str | None = None
 
 
 class RenderOut(BaseModel):
@@ -206,6 +237,7 @@ class MemoDetailOut(MemoOut):
     author_name: str | None = None
     author_position: str | None = None
     addressee: str | None = None
+    company_id: int | None = None
     fields: list[BodyField] = Field(default_factory=list)
     document: DocumentOut | None = None
 

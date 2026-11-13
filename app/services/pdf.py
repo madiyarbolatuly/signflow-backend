@@ -22,12 +22,14 @@ from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
+    Image,
     KeepTogether,
     PageBreak,
     PageTemplate,
@@ -131,6 +133,10 @@ def _styles() -> dict:
         "stamp_head": style("SfStampH", fontName=bold, fontSize=7.5, leading=9,
                             textColor=STAMP, alignment=TA_CENTER),
         "stamp": style("SfStamp", fontSize=8.5, leading=10.5, textColor=STAMP),
+        # Шапка фирменного бланка — мелкий полужирный, как в колонтитуле.
+        "lh_left": style("SfLhL", fontName=bold, fontSize=8, leading=9.5),
+        "lh_right": style("SfLhR", fontName=bold, fontSize=8, leading=9.5,
+                          alignment=TA_RIGHT),
         "_bold": bold,
         "_body": body,
     }
@@ -219,6 +225,47 @@ def _stamp(stamp: dict, st: dict) -> Table:
     return box
 
 
+def _letterhead(letterhead: dict, st: dict) -> Table:
+    """
+    Фирменная шапка компании, как в колонтитуле её бланка: слева реквизиты
+    по-английски, по центру логотип, справа — по-русски; под ней черта.
+    """
+    side = 46 * mm
+    middle = CONTENT_WIDTH - 2 * side
+
+    logo = ""
+    path = None
+    if letterhead.get("logo"):
+        # Импорт здесь: сервис компаний тянет базу, а PDF собирается и без неё.
+        from app.services.companies import LOGO_DIR
+
+        candidate = (LOGO_DIR / letterhead["logo"]).resolve()
+        if candidate.parent == LOGO_DIR.resolve() and candidate.is_file():
+            path = candidate
+    if path is not None:
+        reader = ImageReader(str(path))
+        width_px, height_px = reader.getSize()
+        width = min(middle - 4 * mm, 48 * mm)
+        # mask="auto" — прозрачный фон PNG остаётся прозрачным, а не чёрным.
+        logo = Image(str(path), width=width, height=width * height_px / width_px, mask="auto")
+
+    def column(lines: list[str], style_name: str):
+        return [Paragraph(_text(line), st[style_name]) for line in lines]
+
+    table = _plain_table(
+        [[column(letterhead.get("en") or [], "lh_left"), logo,
+          column(letterhead.get("ru") or [], "lh_right")]],
+        [side, middle, side],
+        [
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (1, 0), (1, 0), "CENTER"),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.8, INK),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 3 * mm),
+        ],
+    )
+    return table
+
+
 # ─── заявление по образцу бланка ─────────────────────────────────────────────
 def _letter_flowables(*, memo, document: dict, st: dict) -> list:
     """
@@ -236,6 +283,10 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
 
     rows: list = []
     style: list = []
+    flow: list = []
+
+    if document.get("letterhead"):
+        flow += [_letterhead(document["letterhead"], st), Spacer(1, 8 * mm)]
 
     for line in document["addressee"]:
         rows.append([Paragraph(_text(line), st["head"]), ""])
@@ -270,7 +321,7 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
     header = _plain_table(rows, [prefix_width, line_width], style)
     head = _plain_table([["", header]], [CONTENT_WIDTH - block_width, block_width])
 
-    flow: list = [
+    flow += [
         head,
         Spacer(1, 16 * mm),
         Paragraph(_text(document["doc_title"]), st["title"]),

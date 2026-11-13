@@ -322,7 +322,7 @@ async def test_dismissal_statement_from_preview_to_signed_pdf(api):
     headers = await _login(client, "author@example.com", "verysecret123")
 
     templates = (await client.get(f"{PREFIX}/admin/templates", headers=headers)).json()
-    assert [t["code"] for t in templates] == ["hiring", "annual_leave", "dismissal"]
+    assert [t["code"] for t in templates][:3] == ["hiring", "annual_leave", "dismissal"]
 
     # ─── предпросмотр до сохранения: пустое поле видно как пропуск ──────────
     resp = await client.post(
@@ -376,3 +376,158 @@ async def test_dismissal_statement_from_preview_to_signed_pdf(api):
     assert pdf.status_code == 200
     assert pdf.content.startswith(b"%PDF-")
 
+
+
+# ─── фирменный бланк компании ────────────────────────────────────────────────
+ROUTE = {"route": [{"policy": "all", "signers": [{"email": "boss@example.com"}]}]}
+
+
+async def _seed_company_and_templates(maker, *, department: str | None = None) -> dict:
+    from sqlalchemy import select
+
+    from app.db.tables import Department, MemoTemplate
+    from app.scripts.seed import apply_companies, apply_templates
+
+    async with maker() as s:
+        await apply_companies(s)
+        await apply_templates(s)
+        if department:
+            dep = Department(name=department)
+            s.add(dep)
+            await s.flush()
+            author = (
+                await s.execute(select(User).where(User.email == "author@example.com"))
+            ).scalar_one()
+            author.department_id = dep.id
+        await s.commit()
+        rows = (await s.execute(select(MemoTemplate.code, MemoTemplate.id))).all()
+    return dict(rows)
+
+
+async def test_company_letterhead_from_editor_to_signer(api):
+    """
+    Компания из отдела сотрудника выбирается по умолчанию; её шапка и
+    адресат видны в предпросмотре, в карточке, у подписанта и в PDF.
+    """
+    from sqlalchemy import select
+
+    client, maker = api
+    ids = await _seed_company_and_templates(maker, department="IT развитие (AI System Group)")
+    headers = await _login(client, "author@example.com", "verysecret123")
+
+    companies = (await client.get(f"{PREFIX}/companies", headers=headers)).json()
+    assert [(c["short_name"], c["is_default"], c["has_logo"]) for c in companies] == [
+        ("AI System Group", True, True)
+    ]
+    company_id = companies[0]["id"]
+
+    logo = await client.get(f"{PREFIX}/companies/{company_id}/logo")
+    assert logo.status_code == 200 and logo.content[:4] == b"\x89PNG", "PNG без авторизации"
+    assert (await client.get(f"{PREFIX}/companies/999/logo")).status_code == 404
+    assert (await client.get(f"{PREFIX}/companies")).status_code == 401
+
+    preview = (
+        await client.post(
+            f"{PREFIX}/memos/render", headers=headers,
+            json={"template_id": ids["tax_deduction"], "body": {"date_from": "2027-01-01"}},
+        )
+    ).json()["document"]
+    assert preview["letterhead"]["ru"][0] == "ТОО «AI System Group»"
+    assert preview["letterhead"]["company_id"] == company_id
+    assert "logo" not in preview["letterhead"], "имя файла наружу не отдаётся"
+    assert preview["addressee"] == [
+        "Генеральному директору", "ТОО «AI System Group»", "А. Кашабаевой",
+    ]
+    # Наименование не рвётся между строк: пробелы в нём неразрывные.
+    assert "применяется только в ТОО «AI System Group»." in preview["paragraphs"][1]
+
+    memo = (
+        await client.post(
+            f"{PREFIX}/memos", headers=headers,
+            json={"title": "Аванс", "template_id": ids["advance"],
+                  "body": {"amount": "150000", "month": "2026-11"}},
+        )
+    ).json()
+    submitted = await client.post(f"{PREFIX}/memos/{memo['id']}/submit", headers=headers,
+                                  json=ROUTE)
+    assert submitted.status_code == 200, submitted.text
+    detail = submitted.json()
+    assert detail["company_id"] == company_id, "компания взята из отдела автора"
+    assert detail["document"]["paragraphs"] == [
+        "Прошу Вас выдать аванс в размере 150\u00a0000 (сто пятьдесят тысяч) тенге "
+        "в счет заработной платы за ноябрь 2026 года."
+    ]
+
+    async with maker() as s:
+        token = (await s.execute(select(ApprovalStep.action_token))).scalar_one()
+    public = (await client.get(f"{PREFIX}/public/sign/{token}")).json()
+    assert public["document"]["letterhead"] == detail["document"]["letterhead"]
+    pdf = await client.get(f"{PREFIX}/public/sign/{token}/pdf")
+    assert pdf.content.startswith(b"%PDF-")
+    assert b"/Subtype /Image" in pdf.content, "логотип встроен в PDF"
+
+
+async def test_unknown_company_is_rejected(api):
+    client, maker = api
+    ids = await _seed_company_and_templates(maker)
+    headers = await _login(client, "author@example.com", "verysecret123")
+    resp = await client.post(
+        f"{PREFIX}/memos", headers=headers,
+        json={"title": "x", "template_id": ids["dismissal"], "company_id": 999,
+              "body": {"dismissal_date": "2026-12-15"}},
+    )
+    assert resp.status_code == 404
+
+
+async def test_iban_format_is_checked_on_the_server(api):
+    client, maker = api
+    ids = await _seed_company_and_templates(maker)
+    headers = await _login(client, "author@example.com", "verysecret123")
+    body = {"account_holder": "Иванова И. И.", "iban": "KZ12", "until": "2027-01-01",
+            "reason": "сменой банка"}
+
+    preview = (
+        await client.post(f"{PREFIX}/memos/render", headers=headers,
+                          json={"template_id": ids["salary_account"], "body": body})
+    ).json()
+    iban = next(f for f in preview["fields"] if f["name"] == "iban")
+    assert iban["error"] and "KZ и 18 знаков" in iban["error"]
+
+    resp = await client.post(
+        f"{PREFIX}/memos", headers=headers,
+        json={"title": "Счёт", "template_id": ids["salary_account"], "body": body},
+    )
+    assert resp.status_code == 400 and "IBAN" in resp.text
+
+    # Пробелы для удобства чтения — не ошибка.
+    body["iban"] = "kz44 9650 3F00 0901 8647"
+    resp = await client.post(
+        f"{PREFIX}/memos", headers=headers,
+        json={"title": "Счёт", "template_id": ids["salary_account"], "body": body},
+    )
+    assert resp.status_code == 201, resp.text
+
+
+async def test_childcare_leave_needs_the_birth_certificate(api):
+    client, maker = api
+    ids = await _seed_company_and_templates(maker)
+    headers = await _login(client, "author@example.com", "verysecret123")
+    memo = (
+        await client.post(
+            f"{PREFIX}/memos", headers=headers,
+            json={"title": "Отпуск по уходу", "template_id": ids["childcare_leave"],
+                  "body": {"child_name": "Иванова А. И.", "date_from": "2027-01-10"}},
+        )
+    ).json()
+
+    resp = await client.post(f"{PREFIX}/memos/{memo['id']}/submit", headers=headers, json=ROUTE)
+    assert resp.status_code == 400
+    assert "свидетельства о рождении" in resp.text
+
+    up = await client.post(
+        f"{PREFIX}/memos/{memo['id']}/attachments", headers=headers,
+        files={"file": ("svidetelstvo.pdf", b"%PDF-1.4 copy", "application/pdf")},
+    )
+    assert up.status_code == 201
+    resp = await client.post(f"{PREFIX}/memos/{memo['id']}/submit", headers=headers, json=ROUTE)
+    assert resp.status_code == 200, resp.text

@@ -84,6 +84,13 @@ def display_value(value, field_type: str | None = None) -> str:
     if field_type == "number":
         return _as_number(value) or str(value)
 
+    if field_type == "money":
+        amount = _as_amount(value)
+        return f"{_as_number(amount)} тенге" if amount is not None else str(value)
+
+    if field_type == "month":
+        return month_text(value) or str(value)
+
     if field_type in (None, "date"):
         as_date = _as_date(value)
         if as_date:
@@ -100,6 +107,22 @@ _MONTHS_GENITIVE = (
     "января", "февраля", "марта", "апреля", "мая", "июня",
     "июля", "августа", "сентября", "октября", "ноября", "декабря",
 )
+
+_MONTHS_NOMINATIVE = (
+    "январь", "февраль", "март", "апрель", "май", "июнь",
+    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+)
+
+_ISO_MONTH = re.compile(r"^(\d{4})-(\d{2})$")
+
+
+def month_text(value) -> str | None:
+    """`2026-11` → «ноябрь 2026»; не похоже на месяц — None."""
+    match = _ISO_MONTH.match(str(value).strip())
+    if not match or not 1 <= int(match.group(2)) <= 12:
+        return None
+    return f"{_MONTHS_NOMINATIVE[int(match.group(2)) - 1]} {match.group(1)}"
+
 
 #: Пропуск в тексте документа, пока поле не заполнено. Виден на листе
 #: предпросмотра так же, как пустая строка на бумажном бланке.
@@ -129,8 +152,81 @@ def _is_empty(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+_UNITS = (
+    ("", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"),
+    ("", "одна", "две", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"),
+)
+_TEENS = (
+    "десять", "одиннадцать", "двенадцать", "тринадцать", "четырнадцать",
+    "пятнадцать", "шестнадцать", "семнадцать", "восемнадцать", "девятнадцать",
+)
+_TENS = (
+    "", "", "двадцать", "тридцать", "сорок", "пятьдесят",
+    "шестьдесят", "семьдесят", "восемьдесят", "девяносто",
+)
+_HUNDREDS = (
+    "", "сто", "двести", "триста", "четыреста", "пятьсот",
+    "шестьсот", "семьсот", "восемьсот", "девятьсот",
+)
+#: Разряды: формы слова и род (тысяча — женского рода: «одна тысяча»).
+_SCALES = (
+    (("", "", ""), 0),
+    (("тысяча", "тысячи", "тысяч"), 1),
+    (("миллион", "миллиона", "миллионов"), 0),
+    (("миллиард", "миллиарда", "миллиардов"), 0),
+)
+
+
+def number_in_words(n: int) -> str:
+    """150000 → «сто пятьдесят тысяч». Целые от нуля до триллиона."""
+    if n == 0:
+        return "ноль"
+    words: list[str] = []
+    for power in range(len(_SCALES) - 1, -1, -1):
+        chunk = n // 1000**power % 1000
+        if not chunk:
+            continue
+        forms, gender = _SCALES[power]
+        hundreds, rest = divmod(chunk, 100)
+        tens, units = divmod(rest, 10)
+        part = [_HUNDREDS[hundreds]]
+        if tens == 1:
+            part.append(_TEENS[units])
+        else:
+            part += [_TENS[tens], _UNITS[gender][units]]
+        if power:
+            part.append(_plural(chunk, list(forms)))
+        words += [w for w in part if w]
+    return " ".join(words)
+
+
+def _as_amount(value) -> int | None:
+    """Сумма в тенге целым числом; «150 000» и «150000» — одно и то же."""
+    text = str(value).replace(" ", "").replace(_NBSP, "").replace(",", ".")
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    if number < 0 or number != int(number) or number >= 10**12:
+        return None
+    return int(number)
+
+
+def amount_text(value) -> str:
+    """«150 000 (сто пятьдесят тысяч) тенге» — как сумма пишется в заявлении."""
+    if _is_empty(value):
+        return f"{GAP} ({GAP}) тенге"
+    amount = _as_amount(value)
+    if amount is None:
+        return f"{value} тенге"
+    return f"{_as_number(amount)} ({number_in_words(amount)}) тенге"
+
+
 def _text_value(value, field_type: str | None, forms: str | None) -> str:
     """Значение поля внутри связного текста документа."""
+    if forms == "words":
+        return amount_text(value)
+
     if _is_empty(value):
         # Слово при числе остаётся и у пропуска: «сроком на ________
         # календарных дней», как на бумажном бланке, а не «сроком на ________.»
@@ -143,6 +239,11 @@ def _text_value(value, field_type: str | None, forms: str | None) -> str:
                 return long_date(date(*(int(p) for p in match.groups())))
             except ValueError:
                 pass
+
+    if field_type == "month":
+        # «за ноябрь 2026 года» — как на бланке «за ______ месяц 2026 года».
+        month = month_text(value)
+        return f"{month} года" if month else str(value)
 
     if forms:
         # «{days:календарный день|календарных дня|календарных дней}» → «21 календарный день».
@@ -161,7 +262,8 @@ def render_text(text_template: str, body: dict | None, schema: dict | None) -> l
 
     Подстановка `{имя_поля}`; для числа можно указать формы слова —
     `{days:календарный день|календарных дня|календарных дней}`, иначе в
-    документе выходит «21 календарных дней». Незаполненное поле, как и поле,
+    документе выходит «21 календарных дней». `{amount:words}` — сумма в
+    тенге цифрами и прописью. Незаполненное поле, как и поле,
     которого нет в схеме, становится пропуском — текст не ломается, а пробел
     виден на листе.
     """
@@ -177,7 +279,9 @@ def render_text(text_template: str, body: dict | None, schema: dict | None) -> l
         return _text_value(body.get(name), types.get(name), forms)
 
     filled = _PLACEHOLDER.sub(substitute, text_template)
-    return [p.strip() for p in re.split(r"\n\s*\n", filled) if p.strip()]
+    # Абзац — каждая строка: в свободном тексте служебной записки автор
+    # начинает новый абзац одним Enter, как в любом редакторе.
+    return [p.strip() for p in filled.splitlines() if p.strip()]
 
 
 def placeholders(text_template: str) -> set[str]:
@@ -207,6 +311,7 @@ def compose_document(
     author_position: str | None,
     dated: datetime | date | None,
     submitted_at: datetime | None = None,
+    company: dict | None = None,
 ) -> dict | None:
     """
     Документ в виде, повторяющем бумажный бланк компании.
@@ -225,8 +330,25 @@ def compose_document(
     schema = schema or {}
     body = body or {}
 
-    lines = addressee.splitlines() if addressee and addressee.strip() else schema.get("addressee") or []
+    # «Кому»: что вписал автор, иначе директор выбранной компании, иначе
+    # адресат из шаблона.
+    if addressee and addressee.strip():
+        lines = addressee.splitlines()
+    else:
+        lines = (company or {}).get("addressee") or schema.get("addressee") or []
     addressee_lines = [line.strip() for line in lines if line.strip()]
+
+    # Фирменная шапка компании — над адресатом, как в колонтитуле бланка.
+    letterhead = None
+    if company and (company.get("letterhead_ru") or company.get("letterhead_en")):
+        letterhead = {
+            "company_id": company.get("id"),
+            "en": list(company.get("letterhead_en") or []),
+            "ru": list(company.get("letterhead_ru") or []),
+            "has_logo": bool(company.get("logo")),
+            # Имя файла логотипа — для PDF; в ответ API не попадает.
+            "logo": company.get("logo"),
+        }
 
     sender = []
     if author_position and author_position.strip():
@@ -265,15 +387,59 @@ def compose_document(
 
     return {
         "kind": "letter",
+        "letterhead": letterhead,
         "addressee": addressee_lines,
         "sender": sender,
         "header_fields": header_fields,
         "doc_title": schema.get("doc_title") or "Заявление",
-        "paragraphs": render_text(text_template, body, schema),
+        # {company} в тексте — наименование выбранной компании
+        # («вычет применяется только в ТОО «AI System Group»»).
+        # Неразрывные пробелы: «ТОО «AI System Group»» не рвётся между строк.
+        "paragraphs": render_text(
+            text_template,
+            {"company": ((company or {}).get("name") or "").replace(" ", _NBSP) or None, **body},
+            schema,
+        ),
         "date": date_text,
         "signer": (author_name or "").strip(),
         "stamp": stamp,
     }
+
+
+def field_error(field: dict, value) -> str | None:
+    """
+    Что не так со значением поля, или None.
+
+    Пустое значение здесь не ошибка — обязательность проверяется отдельно.
+    Проверяется формат: `pattern` из схемы (например, IBAN) и сумма у поля
+    типа `money`.
+    """
+    if _is_empty(value):
+        return None
+    text = str(value).strip()
+    label = field.get("label") or field.get("name")
+    pattern = field.get("pattern")
+    if pattern:
+        # Пробелы внутри номера счёта ставят для удобства чтения — не ошибка.
+        compact = re.sub(r"\s+", "", text).upper()
+        if not re.fullmatch(pattern, compact):
+            hint = field.get("pattern_hint")
+            return f"«{label}»: неверный формат" + (f" — {hint}" if hint else "")
+    if field.get("type") == "money" and _as_amount(text) is None:
+        return f"«{label}»: укажите сумму в тенге целым числом"
+    return None
+
+
+def body_errors(body: dict | None, schema: dict | None) -> list[str]:
+    """Ошибки формата во всех полях записки."""
+    body = body or {}
+    errors = []
+    for f in (schema or {}).get("fields", []):
+        if f.get("name"):
+            error = field_error(f, body.get(f["name"]))
+            if error:
+                errors.append(error)
+    return errors
 
 
 def preview_fields(body: dict | None, schema: dict | None) -> list[dict]:
@@ -302,6 +468,7 @@ def preview_fields(body: dict | None, schema: dict | None) -> list[dict]:
                 "value": None if empty else value,
                 "display": "" if empty else display_value(value, f.get("type")),
                 "missing": empty,
+                "error": field_error(f, value),
             }
         )
     return result

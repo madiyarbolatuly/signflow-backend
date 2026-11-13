@@ -1,8 +1,10 @@
 """
-Первичное наполнение: администратор, подразделение и шаблоны заявлений.
+Первичное наполнение: администратор, подразделение, компании группы и
+шаблоны заявлений.
 
-Шаблоны повторяют бумажные бланки компании — заявления на приём, на
-трудовой отпуск и на увольнение: адресат, текст и состав полей взяты с них.
+Шаблоны повторяют бумажные бланки компании — заявления на приём, отпуск,
+увольнение, аванс, удержание и другие: текст и состав полей взяты с них.
+Шапка бланка и адресат берутся из выбранной компании.
 
 Идемпотентно: повторный запуск ничего не дублирует, а изменения шаблонов
 дописывает в уже существующие, поэтому сценарий безопасно вызывать при
@@ -24,15 +26,69 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import hash_password
 from app.db.enums import UserRole
 from app.db.session import async_session
-from app.db.tables import Department, MemoTemplate, User
+from app.db.tables import Company, Department, MemoTemplate, User
 
-#: Адресат по реквизитам компании: ТОО «AI System Group», БИН 190740026451,
-#: генеральный директор Кашабаева Анаргуль Тулешовна (действует на основании
-#: Устава). Запись — как на бланках компании без обращения: инициал перед
-#: фамилией в дательном падеже («Ж. Құсайын», «А. Жусуповой»).
-#: В каждой записке адресата можно поправить — например, для заявления в
-#: другое юрлицо группы.
-ADDRESSEE = [
+#: Юрлица группы. Отсюда берутся фирменная шапка бланка и адресат «Кому»:
+#: автор выбирает компанию в редакторе. Адресат — как на бланках компании,
+#: без обращения: инициал перед фамилией в дательном падеже («Ж. Құсайын»,
+#: «А. Жусуповой»).
+#:
+#: Новая компания — ещё одна запись здесь и логотип в
+#: `app/assets/letterheads/`. `short_name` должен совпадать с тем, как
+#: компания записана в названии отдела «Отдел (Компания)»: по нему
+#: сотруднику предлагается его компания.
+COMPANIES = [
+    {
+        "code": "aisg",
+        "name": "ТОО «AI System Group»",
+        "short_name": "AI System Group",
+        "bin": "190740026451",
+        "legal_address": (
+            "РК, город Астана, район Нұра, Жилой массив Комсомольский, "
+            "улица Айша Бибі, дом 48"
+        ),
+        "actual_address": "РК, город Астана, район Нұра, улица Жылыой, дом 24",
+        "iban": "KZ4496503F0009018647",
+        "bank": "Филиал АО «ForteBank» в г. Астана",
+        "bik": "IRTYKZKA",
+        "kbe": "17",
+        "director_position": "Генеральный директор",
+        "director_name": "Кашабаева Анаргуль Тулешовна",
+        "addressee": [
+            "Генеральному директору",
+            "ТОО «AI System Group»",
+            "А. Кашабаевой",
+        ],
+        # Колонтитул фирменного бланка — из «Реквизиты AI System Group.docx».
+        "letterhead_en": [
+            "«AI System Group» LLP",
+            "BIN 190740026451",
+            "010000, Republic of Kazakhstan",
+            "Astana, Nura District,",
+            "Komsomolsky Residential Area,",
+            "48 Aisha Bibi Street",
+        ],
+        "letterhead_ru": [
+            "ТОО «AI System Group»",
+            "БИН 190740026451",
+            "010000, Республика Казахстан",
+            "г. Астана, район Нура,",
+            "Жилой массив Комсомольский,",
+            "улица Айша Биби, дом 48",
+        ],
+        "logo": "aisg.png",
+    },
+]
+
+#: Месяц для полей «за какой месяц» — значение `2026-11`, в тексте
+#: «ноябрь 2026 года».
+_MONTH_FIELD = {"type": "month", "required": True}
+
+#: Адресат трёх первых шаблонов — из времени до выбора компании. Новым
+#: документам адресата даёт компания; этот остаётся для уже созданных
+#: документов без компании и без своего «Кому»: иначе в их карточках
+#: адресат пропал бы.
+LEGACY_ADDRESSEE = [
     "Генеральному директору",
     "ТОО «AI System Group»",
     "А. Кашабаевой",
@@ -44,7 +100,7 @@ TEMPLATES = [
         "title": "Заявление на приём на работу",
         "body_schema": {
             "doc_title": "Заявление",
-            "addressee": ADDRESSEE,
+            "addressee": LEGACY_ADDRESSEE,
             "fields": [
                 {"name": "position", "label": "Должность", "type": "text", "required": True},
                 {"name": "start_date", "label": "Дата начала работы", "type": "date",
@@ -68,7 +124,7 @@ TEMPLATES = [
         "title": "Заявление на трудовой отпуск",
         "body_schema": {
             "doc_title": "Заявление",
-            "addressee": ADDRESSEE,
+            "addressee": LEGACY_ADDRESSEE,
             "fields": [
                 {"name": "date_from", "label": "Дата начала отпуска", "type": "date",
                  "required": True},
@@ -87,7 +143,7 @@ TEMPLATES = [
         "title": "Заявление на увольнение",
         "body_schema": {
             "doc_title": "Заявление",
-            "addressee": ADDRESSEE,
+            "addressee": LEGACY_ADDRESSEE,
             "fields": [
                 {"name": "dismissal_date", "label": "Дата увольнения", "type": "date",
                  "required": True},
@@ -98,7 +154,177 @@ TEMPLATES = [
             "{dismissal_date} года."
         ),
     },
+    {
+        "code": "advance",
+        "title": "Заявление на аванс",
+        "body_schema": {
+            "doc_title": "Заявление",
+            "fields": [
+                {"name": "amount", "label": "Сумма аванса, тенге", "type": "money",
+                 "required": True},
+                {"name": "month", "label": "За какой месяц", **_MONTH_FIELD},
+            ],
+        },
+        "text_template": (
+            "Прошу Вас выдать аванс в размере {amount:words} в счет заработной платы "
+            "за {month}."
+        ),
+    },
+    {
+        "code": "salary_account",
+        "title": "Заявление о перечислении зарплаты на другой счёт",
+        "body_schema": {
+            "doc_title": "Заявление",
+            "fields": [
+                {"name": "account_holder", "label": "На чьё имя счёт (ФИО)", "type": "text",
+                 "required": True},
+                {"name": "iban", "label": "Номер счёта (IBAN)", "type": "text",
+                 "required": True, "pattern": r"KZ\d{2}[A-Z0-9]{16}",
+                 "pattern_hint": "KZ и 18 знаков, например KZ4496503F0009018647"},
+                {"name": "until", "label": "На срок до", "type": "date", "required": True},
+                {"name": "reason", "label": "Причина (в связи с …)", "type": "text",
+                 "required": True},
+            ],
+        },
+        "text_template": (
+            "Прошу Вас перечислять мою заработную плату на счет {account_holder}, "
+            "счет № {iban}, на срок до {until} года в связи с {reason}."
+        ),
+    },
+    {
+        "code": "deduction_card",
+        "title": "Заявление на удержание (корпоративная карта)",
+        "body_schema": {
+            "doc_title": "Заявление",
+            "fields": [
+                {"name": "period_from", "label": "Период использования: с", "type": "date",
+                 "required": True},
+                {"name": "period_to", "label": "Период использования: по", "type": "date",
+                 "required": True},
+                {"name": "amount", "label": "Сумма удержания, тенге", "type": "money",
+                 "required": True},
+                {"name": "month", "label": "Удержать из зарплаты за", **_MONTH_FIELD},
+            ],
+        },
+        "text_template": (
+            "Мной были использованы денежные средства с корпоративной карты «Яндекс» "
+            "в период с {period_from} г. по {period_to} г. для личного пользования.\n\n"
+            "Прошу Вас удержать сумму в размере {amount:words} с моей заработной платы "
+            "за {month}. С удержанием согласен(-на)."
+        ),
+    },
+    {
+        "code": "tax_deduction",
+        "title": "Заявление на налоговый вычет",
+        "body_schema": {
+            "doc_title": "Заявление",
+            "fields": [
+                {"name": "date_from", "label": "Применять вычет с", "type": "date",
+                 "required": True},
+            ],
+        },
+        # {company} — наименование выбранной компании, подставляется само.
+        "text_template": (
+            "В соответствии со статьей 403 Налогового кодекса РК в целях уменьшения "
+            "налогооблагаемого дохода при исчислении индивидуального подоходного налога "
+            "прошу производить расчет с вычетом в сумме 30-кратного месячного расчетного "
+            "показателя из моего дохода за каждый календарный месяц с {date_from} года.\n\n"
+            "Указанный налоговый вычет по моим доходам применяется только в {company}.\n\n"
+            "В случае изменения обстоятельств, дающих право на использование данных "
+            "налоговых вычетов, обязуюсь немедленно сообщить об этом."
+        ),
+    },
+    {
+        "code": "childcare_leave",
+        "title": "Заявление на отпуск по уходу за ребёнком",
+        "body_schema": {
+            "doc_title": "Заявление",
+            # Без копии свидетельства документ не отправить: на бланке
+            # «Копию свидетельства о рождении прилагаю».
+            "required_attachment": "копия свидетельства о рождении ребёнка",
+            "fields": [
+                {"name": "child_name", "label": "ФИО ребёнка", "type": "text",
+                 "required": True},
+                {"name": "date_from", "label": "Дата начала отпуска", "type": "date",
+                 "required": True},
+            ],
+        },
+        "text_template": (
+            "Прошу Вас предоставить мне отпуск по уходу за ребенком {child_name} "
+            "до достижения его (её) 3-х лет с {date_from} года.\n\n"
+            "Копию свидетельства о рождении прилагаю."
+        ),
+    },
+    {
+        "code": "childcare_return",
+        "title": "Заявление о досрочном выходе из отпуска по уходу за ребёнком",
+        "body_schema": {
+            "doc_title": "Заявление",
+            "fields": [
+                {"name": "return_date", "label": "Дата выхода на работу", "type": "date",
+                 "required": True},
+                {"name": "day_mode", "label": "Продолжительность рабочего дня",
+                 "type": "select", "options": ["нормальной", "неполной"], "required": True},
+            ],
+        },
+        "text_template": (
+            "Прошу Вас прервать отпуск без сохранения заработной платы по уходу за "
+            "ребенком до достижения им возраста трех лет и разрешить приступить к "
+            "исполнению обязанностей с {return_date} года с {day_mode} "
+            "продолжительностью рабочего дня."
+        ),
+    },
+    {
+        "code": "memo_free",
+        "title": "Служебная записка",
+        "body_schema": {
+            "doc_title": "Служебная записка",
+            "fields": [
+                {"name": "text", "label": "Текст служебной записки", "type": "textarea",
+                 "required": True},
+            ],
+        },
+        "text_template": "{text}",
+    },
+    {
+        "code": "memo_deduction",
+        "title": "Служебная записка на удержание (ОС, ТМЦ)",
+        "body_schema": {
+            "doc_title": "Служебная записка",
+            "fields": [
+                {"name": "amount", "label": "Сумма удержания, тенге", "type": "money",
+                 "required": True},
+                {"name": "items", "label": "За что (выданные ОС, ТМЦ, спецодежда и т. д.)",
+                 "type": "textarea", "required": True},
+            ],
+        },
+        "text_template": (
+            "Прошу Вас удержать с меня сумму в размере {amount:words} за {items}.\n\n"
+            "С удержанием согласен(-на)."
+        ),
+    },
 ]
+
+_COMPANY_KEYS = tuple(k for k in COMPANIES[0] if k != "code")
+
+
+async def apply_companies(session: AsyncSession) -> list[str]:
+    """Создаёт компании и обновляет реквизиты существующих. Идемпотентно."""
+    log: list[str] = []
+    for spec in COMPANIES:
+        company = (
+            await session.execute(select(Company).where(Company.code == spec["code"]))
+        ).scalar_one_or_none()
+        if company is None:
+            session.add(Company(**spec, is_active=True))
+            log.append(f"создана компания {spec['name']}")
+            continue
+        if any(getattr(company, key) != spec.get(key) for key in _COMPANY_KEYS):
+            for key in _COMPANY_KEYS:
+                setattr(company, key, spec.get(key))
+            log.append(f"обновлены реквизиты {spec['name']}")
+    await session.flush()
+    return log
 
 #: Учебные шаблоны первой версии. Не удаляются — на них ссылаются уже
 #: созданные записки, — а выключаются: из списка при создании они пропадают.
@@ -186,6 +412,8 @@ async def seed(admin_email: str, admin_password: str | None) -> None:
         else:
             print(f"администратор {admin_email} уже существует, пропущен")
 
+        for line in await apply_companies(session):
+            print(line)
         for line in await apply_templates(session):
             print(line)
 
