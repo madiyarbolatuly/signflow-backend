@@ -22,7 +22,7 @@ from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.lib.utils import ImageReader
+from reportlab.lib.utils import ImageReader, simpleSplit
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
@@ -295,15 +295,27 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
     rows.append(["", ""])  # отступ перед «от»
     style.append(("TOPPADDING", (0, len(rows) - 1), (-1, len(rows) - 1), 3))
 
+    def lined(value: str, prefix: str = "") -> None:
+        """
+        Значение на линиях бланка: каждая строка — на своей черте. Длинная
+        должность переносится, и без этого черта оставалась только под
+        последней строкой, а первая висела в воздухе.
+        """
+        lines = simpleSplit(value, st["right"].fontName, st["right"].fontSize, line_width) or [""]
+        for number, text in enumerate(lines):
+            row = len(rows)
+            rows.append([
+                Paragraph(prefix if number == 0 else "", st["head"]),
+                Paragraph(_text(text), st["right"]),
+            ])
+            style.append(("LINEBELOW", (1, row), (1, row), 0.6, INK))
+            style.append(("BOTTOMPADDING", (0, row), (-1, row), 1))
+            if number:
+                style.append(("TOPPADDING", (0, row), (-1, row), 2))
+
     for index, item in enumerate(document["sender"]):
-        value_row = len(rows)
-        rows.append([
-            Paragraph("от" if index == 0 else "", st["head"]),
-            Paragraph(_text(item["value"]), st["right"]),
-        ])
         # Значение стоит на линии — как вписанное в бланк от руки.
-        style.append(("LINEBELOW", (1, value_row), (1, value_row), 0.6, INK))
-        style.append(("BOTTOMPADDING", (0, value_row), (-1, value_row), 1))
+        lined(item["value"], "от" if index == 0 else "")
         rows.append(["", Paragraph(f"({_text(item['caption'])})", st["caption"])])
         style.append(("BOTTOMPADDING", (0, len(rows) - 1), (-1, len(rows) - 1), 4))
 
@@ -314,8 +326,7 @@ def _letter_flowables(*, memo, document: dict, st: dict) -> list:
             "",
         ])
         style.append(("SPAN", (0, value_row), (1, value_row)))
-        rows.append(["", Paragraph(_text(field["display"]), st["right"])])
-        style.append(("LINEBELOW", (1, len(rows) - 1), (1, len(rows) - 1), 0.6, INK))
+        lined(field["display"])
         style.append(("BOTTOMPADDING", (0, len(rows) - 1), (-1, len(rows) - 1), 3))
 
     header = _plain_table(rows, [prefix_width, line_width], style)
