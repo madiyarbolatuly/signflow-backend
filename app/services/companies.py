@@ -30,6 +30,7 @@ def as_dict(company: Company | None) -> dict | None:
         "addressee": list(company.addressee or []),
         "letterhead_en": list(company.letterhead_en or []),
         "letterhead_ru": list(company.letterhead_ru or []),
+        "letterhead_font": company.letterhead_font,
         "logo": company.logo,
     }
 
@@ -64,11 +65,19 @@ async def default_for(session: AsyncSession, user: User, companies: list[Company
         ).scalar_one_or_none()
         match = _DEPARTMENT_COMPANY.search(name or "")
         if match:
-            wanted = match.group(1).strip().lower()
+            wanted = _key(match.group(1))
             for company in companies:
-                if company.short_name.strip().lower() == wanted:
+                if _key(company.short_name) == wanted:
                     return company
     return companies[0]
+
+
+def _key(name: str) -> str:
+    """
+    Название для сравнения: без регистра, пробелов и дефисов. В справочнике
+    сотрудников «Industrial Smart Tech», а в бланке «Industrial SmartTech».
+    """
+    return re.sub(r"[\W_]+", "", name).lower()
 
 
 def logo_path(company: Company) -> Path | None:

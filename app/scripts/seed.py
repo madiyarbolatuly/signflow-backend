@@ -35,8 +35,11 @@ from app.db.tables import Company, Department, MemoTemplate, User
 #:
 #: Новая компания — ещё одна запись здесь и логотип в
 #: `app/assets/letterheads/`. `short_name` должен совпадать с тем, как
-#: компания записана в названии отдела «Отдел (Компания)»: по нему
-#: сотруднику предлагается его компания.
+#: компания записана в названии отдела «Отдел (Компания)» (без учёта
+#: пробелов и дефисов): по нему сотруднику предлагается его компания.
+#:
+#: Шапки — из колонтитулов присланных бланков, строка в строку: первая
+#: строка (наименование) печатается полужирным, остальные — обычным.
 COMPANIES = [
     {
         "code": "aisg",
@@ -59,14 +62,12 @@ COMPANIES = [
             "ТОО «AI System Group»",
             "А. Кашабаевой",
         ],
-        # Колонтитул фирменного бланка — из «Реквизиты AI System Group.docx».
+        # Колонтитул — из «Уведомление о смене наименования.docx».
         "letterhead_en": [
             "«AI System Group» LLP",
             "BIN 190740026451",
             "010000, Republic of Kazakhstan",
-            "Astana, Nura District,",
-            "Komsomolsky Residential Area,",
-            "48 Aisha Bibi Street",
+            "Astana, Nura District, Komsomolsky Residential Area, 48 Aisha Bibi Street",
         ],
         "letterhead_ru": [
             "ТОО «AI System Group»",
@@ -76,7 +77,84 @@ COMPANIES = [
             "Жилой массив Комсомольский,",
             "улица Айша Биби, дом 48",
         ],
+        "letterhead_font": "serif",
         "logo": "aisg.png",
+    },
+    {
+        "code": "ist",
+        "name": "ТОО «Industrial SmartTech»",
+        "short_name": "Industrial SmartTech",
+        "bin": "060240026358",
+        "legal_address": "РК, г. Астана, ул. Жылыой, 24",
+        "actual_address": None,
+        "iban": None,
+        "bank": None,
+        "bik": None,
+        "kbe": None,
+        "director_position": "Генеральный директор",
+        # Полное имя в присланных документах не встречается — только
+        # «Усенов М.К.» в подписи письма.
+        "director_name": "Усенов М. К.",
+        "addressee": [
+            "Генеральному директору",
+            "ТОО «Industrial SmartTech»",
+            "М. Усенову",
+        ],
+        # Колонтитул — из «Письмо по потопу Industrial_SmartTech.docx».
+        "letterhead_en": [
+            "Industrial SmartTech LLP",
+            "BIN 060240026358",
+            "060000, Republic of Kazakhstan",
+            "Astana,",
+            "Zhylyoy 24",
+        ],
+        "letterhead_ru": [
+            "ТОО «Industrial SmartTech»",
+            "БИН 060240026358",
+            "060000, Республика Казахстан",
+            "г. Астана,",
+            "ул. Жылыой 24",
+        ],
+        "letterhead_font": "narrow",
+        "logo": "ist.png",
+    },
+    {
+        "code": "gqs",
+        "name": "ТОО «GQ-System»",
+        "short_name": "GQ-System",
+        "bin": "180940031651",
+        "legal_address": "РК, г. Нур-Султан, пр. Момышулы, зд. 16, в.п. 12",
+        "actual_address": None,
+        "iban": None,
+        "bank": None,
+        "bik": None,
+        "kbe": None,
+        "director_position": "Генеральный директор",
+        # Директор в бланке не указан — адресат без фамилии, пока его не
+        # назовут; автор может дописать «Кому» в документе.
+        "director_name": None,
+        "addressee": [
+            "Генеральному директору",
+            "ТОО «GQ-System»",
+        ],
+        # Колонтитул — из «Бланк GQ System.docx».
+        "letterhead_en": [
+            "«GQ-System» LLP",
+            "BIN 180940031651",
+            "010000, Republic of Kazakhstan",
+            "Nur-Sultan, 16 Momyshuly ave., IP 12",
+            "tel: +7 777 211 30 85",
+        ],
+        "letterhead_ru": [
+            "ТОО «GQ-System»",
+            "БИН 180940031651",
+            "010000, Республика Казахстан",
+            "г. Нур-Султан, пр. Момышулы,",
+            "зд. 16, в.п. 12",
+            "тел.: +7 777 211 30 85",
+        ],
+        "letterhead_font": "narrow",
+        "logo": "gqs.png",
     },
 ]
 

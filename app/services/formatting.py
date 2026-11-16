@@ -346,6 +346,7 @@ def compose_document(
             "en": list(company.get("letterhead_en") or []),
             "ru": list(company.get("letterhead_ru") or []),
             "has_logo": bool(company.get("logo")),
+            "font": company.get("letterhead_font") or "serif",
             # Имя файла логотипа — для PDF; в ответ API не попадает.
             "logo": company.get("logo"),
         }

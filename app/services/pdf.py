@@ -60,6 +60,34 @@ _FONT_CANDIDATES: list[tuple[str, str]] = [
 
 _fonts_ready = False
 
+FONT_NARROW = "SignFlowNarrow"
+FONT_NARROW_BOLD = "SignFlowNarrowBold"
+
+#: Узкий шрифт фирменных шапок — Arial Narrow, как в бланках Industrial
+#: SmartTech и GQ-System. В образе Docker — Liberation Sans Narrow из пакета
+#: `fonts-liberation`, метрически совместимый с Arial Narrow.
+_NARROW_CANDIDATES: list[tuple[str, str]] = [
+    ("C:/Windows/Fonts/ARIALN.TTF", "C:/Windows/Fonts/ARIALNB.TTF"),
+    ("/usr/share/fonts/truetype/liberation/LiberationSansNarrow-Regular.ttf",
+     "/usr/share/fonts/truetype/liberation/LiberationSansNarrow-Bold.ttf"),
+]
+
+_narrow_ready: bool | None = None
+
+
+def _narrow_fonts() -> tuple[str, str] | None:
+    """Пара «обычный, полужирный» узкого шрифта или None, если его нет."""
+    global _narrow_ready
+    if _narrow_ready is None:
+        _narrow_ready = False
+        for regular, bold in _NARROW_CANDIDATES:
+            if Path(regular).exists() and Path(bold).exists():
+                pdfmetrics.registerFont(TTFont(FONT_NARROW, regular))
+                pdfmetrics.registerFont(TTFont(FONT_NARROW_BOLD, bold))
+                _narrow_ready = True
+                break
+    return (FONT_NARROW, FONT_NARROW_BOLD) if _narrow_ready else None
+
 #: Поля страницы, как в бланках компании.
 MARGIN_LEFT = 30 * mm
 MARGIN_RIGHT = 15 * mm
@@ -133,10 +161,6 @@ def _styles() -> dict:
         "stamp_head": style("SfStampH", fontName=bold, fontSize=7.5, leading=9,
                             textColor=STAMP, alignment=TA_CENTER),
         "stamp": style("SfStamp", fontSize=8.5, leading=10.5, textColor=STAMP),
-        # Шапка фирменного бланка — мелкий полужирный, как в колонтитуле.
-        "lh_left": style("SfLhL", fontName=bold, fontSize=8, leading=9.5),
-        "lh_right": style("SfLhR", fontName=bold, fontSize=8, leading=9.5,
-                          alignment=TA_RIGHT),
         "_bold": bold,
         "_body": body,
     }
@@ -230,7 +254,9 @@ def _letterhead(letterhead: dict, st: dict) -> Table:
     Фирменная шапка компании, как в колонтитуле её бланка: слева реквизиты
     по-английски, по центру логотип, справа — по-русски; под ней черта.
     """
-    side = 46 * mm
+    # Реквизитам — пошире, логотипу хватает и остатка: иначе адреса
+    # переносятся посреди («пр. Момышулы зд. / 16»).
+    side = 50 * mm
     middle = CONTENT_WIDTH - 2 * side
 
     logo = ""
@@ -249,12 +275,31 @@ def _letterhead(letterhead: dict, st: dict) -> Table:
         # mask="auto" — прозрачный фон PNG остаётся прозрачным, а не чёрным.
         logo = Image(str(path), width=width, height=width * height_px / width_px, mask="auto")
 
-    def column(lines: list[str], style_name: str):
-        return [Paragraph(_text(line), st[style_name]) for line in lines]
+    # Как в колонтитулах бланков: 10 pt, полужирное только наименование
+    # компании (первая строка), остальное — обычным; шрифт — из бланка.
+    regular, bold = st["_body"], st["_bold"]
+    if letterhead.get("font") == "narrow" and _narrow_fonts():
+        regular, bold = _narrow_fonts()
+
+    def column(lines: list[str], alignment):
+        return [
+            Paragraph(
+                _text(line),
+                ParagraphStyle(
+                    f"SfLh{alignment}{index}",
+                    fontName=bold if index == 0 else regular,
+                    fontSize=10,
+                    leading=11.5,
+                    textColor=INK,
+                    alignment=alignment,
+                ),
+            )
+            for index, line in enumerate(lines)
+        ]
 
     table = _plain_table(
-        [[column(letterhead.get("en") or [], "lh_left"), logo,
-          column(letterhead.get("ru") or [], "lh_right")]],
+        [[column(letterhead.get("en") or [], TA_LEFT), logo,
+          column(letterhead.get("ru") or [], TA_RIGHT)]],
         [side, middle, side],
         [
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),

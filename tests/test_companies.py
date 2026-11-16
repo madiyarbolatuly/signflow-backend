@@ -57,31 +57,57 @@ def test_body_errors():
 
 # ─── справочник ──────────────────────────────────────────────────────────────
 async def test_seed_companies_is_idempotent(session):
-    assert await apply_companies(session) == ["создана компания ТОО «AI System Group»"]
+    assert await apply_companies(session) == [
+        "создана компания ТОО «AI System Group»",
+        "создана компания ТОО «Industrial SmartTech»",
+        "создана компания ТОО «GQ-System»",
+    ]
     assert await apply_companies(session) == []
 
-    company = (await session.execute(select(Company))).scalar_one()
+    company = (
+        await session.execute(select(Company).where(Company.code == "aisg"))
+    ).scalar_one()
     company.director_name = "кто-то другой"
     await session.flush()
     assert await apply_companies(session) == ["обновлены реквизиты ТОО «AI System Group»"]
     assert company.director_name == COMPANIES[0]["director_name"]
 
 
-async def test_default_company_follows_the_department(session):
+@pytest.mark.parametrize(
+    "department,code",
+    [
+        ("IT развитие (AI System Group)", "aisg"),
+        # В справочнике сотрудников — с пробелом, в бланке — слитно.
+        ("Склад (Industrial Smart Tech)", "ist"),
+        ("Продажи (GQ-System)", "gqs"),
+        ("Отдел (Неизвестная компания)", "aisg"),
+    ],
+)
+async def test_default_company_follows_the_department(session, department, code):
     await apply_companies(session)
-    session.add(Company(code="ist", name="ТОО «Industrial Smart Tech»",
-                        short_name="Industrial Smart Tech", addressee=[], letterhead_en=[],
-                        letterhead_ru=[], is_active=True))
-    dep = Department(name="Склад (Industrial Smart Tech)")
+    dep = Department(name=department)
     session.add(dep)
     await session.flush()
 
     items = await companies.active(session)
     worker = User(email="w@example.com", full_name="W", department_id=dep.id)
+    assert (await companies.default_for(session, worker, items)).code == code
+
+
+async def test_default_company_without_department(session):
+    await apply_companies(session)
     nobody = User(email="n@example.com", full_name="N")
-    assert (await companies.default_for(session, worker, items)).code == "ist"
+    items = await companies.active(session)
     assert (await companies.default_for(session, nobody, items)).code == "aisg", "иначе первая"
     assert await companies.default_for(session, nobody, []) is None
+
+
+def test_every_company_has_a_logo_and_letterhead():
+    for spec in COMPANIES:
+        assert companies.logo_path(Company(**spec)) is not None, spec["code"]
+        # Первая строка шапки — наименование, она печатается полужирным.
+        assert spec["letterhead_ru"][0] == spec["name"]
+        assert spec["letterhead_font"] in ("serif", "narrow")
 
 
 def test_logo_cannot_escape_the_assets_folder():

@@ -417,13 +417,27 @@ async def test_company_letterhead_from_editor_to_signer(api):
 
     companies = (await client.get(f"{PREFIX}/companies", headers=headers)).json()
     assert [(c["short_name"], c["is_default"], c["has_logo"]) for c in companies] == [
-        ("AI System Group", True, True)
+        ("AI System Group", True, True),
+        ("Industrial SmartTech", False, True),
+        ("GQ-System", False, True),
     ]
     company_id = companies[0]["id"]
 
     logo = await client.get(f"{PREFIX}/companies/{company_id}/logo")
     assert logo.status_code == 200 and logo.content[:4] == b"\x89PNG", "PNG без авторизации"
     assert (await client.get(f"{PREFIX}/companies/999/logo")).status_code == 404
+
+    # Выбор другой компании меняет шапку, её шрифт и адресата.
+    ist = (
+        await client.post(
+            f"{PREFIX}/memos/render", headers=headers,
+            json={"template_id": ids["dismissal"], "company_id": companies[1]["id"],
+                  "body": {"dismissal_date": "2026-12-15"}},
+        )
+    ).json()["document"]
+    assert ist["letterhead"]["ru"][0] == "ТОО «Industrial SmartTech»"
+    assert ist["letterhead"]["font"] == "narrow"
+    assert ist["addressee"] == ["Генеральному директору", "ТОО «Industrial SmartTech»", "М. Усенову"]
     assert (await client.get(f"{PREFIX}/companies")).status_code == 401
 
     preview = (

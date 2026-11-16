@@ -195,6 +195,8 @@ class DocumentLetterhead(BaseModel):
     en: list[str] = Field(default_factory=list)
     ru: list[str] = Field(default_factory=list)
     has_logo: bool = False
+    #: «serif» — Times New Roman, «narrow» — Arial Narrow, как в бланке.
+    font: str = "serif"
 
 
 class DocumentOut(BaseModel):

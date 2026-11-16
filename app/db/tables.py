@@ -133,6 +133,9 @@ class Company(Base):
     #: Фирменная шапка бланка — английский и русский столбцы по строкам.
     letterhead_en: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     letterhead_ru: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    #: Шрифт шапки, как в бланке компании: «serif» (Times New Roman) или
+    #: «narrow» (Arial Narrow). NULL — как основной текст.
+    letterhead_font: Mapped[str | None] = mapped_column(String(16), nullable=True)
     #: Файл логотипа в `app/assets/letterheads/` (PNG с прозрачным фоном —
     #: на тёмной теме экрана не будет белого прямоугольника).
     logo: Mapped[str | None] = mapped_column(String(255), nullable=True)
