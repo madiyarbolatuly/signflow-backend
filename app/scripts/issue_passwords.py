@@ -5,7 +5,7 @@
     python -m app.scripts.issue_passwords --company "AI System Group"
 
     # сделать сотрудника администратором (и выдать пароль, если его нет)
-    python -m app.scripts.issue_passwords --admin m.saduakas@gqgroup.kz
+    python -m app.scripts.issue_passwords --admin admin@company.kz
 
 Пароли не печатаются в консоль: они записываются в CSV в `data/` (каталог
 исключён из git), откуда их раздают сотрудникам. Файл открывается в Excel —
