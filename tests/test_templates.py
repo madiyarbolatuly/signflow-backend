@@ -76,7 +76,8 @@ def test_templates_from_the_paper_forms():
     assert [t["code"] for t in TEMPLATES] == [
         "hiring", "annual_leave", "dismissal",
         "advance", "salary_account", "deduction_card", "tax_deduction",
-        "childcare_leave", "childcare_return", "memo_free", "memo_deduction",
+        "childcare_leave", "childcare_return", "unpaid_leave",
+        "memo_free", "memo_deduction",
     ]
 
 
@@ -159,6 +160,37 @@ def test_gap_keeps_the_word_after_a_number():
     text = " ".join(render_text(t["text_template"], {"date_from": "2026-12-01"},
                                 t["body_schema"]))
     assert text.endswith(f"сроком на {GAP} календарных дней.")
+
+
+def test_unpaid_leave_reads_like_the_paper_form():
+    """«заявление на БС.docx»: «сроком на ___ (прописью) календарных дней с дд/мм/гг»."""
+    t = _by_code("unpaid_leave")
+    text = " ".join(render_text(t["text_template"], SAMPLE, t["body_schema"]))
+    assert text == (
+        "Прошу Вас предоставить мне отпуск без сохранения заработной платы, "
+        "сроком на 14 (четырнадцать) календарных дней с «01» декабря 2026 года."
+    )
+
+
+@pytest.mark.parametrize(
+    "days,expected",
+    [
+        ("1", "1 (один) календарный день"),
+        ("3", "3 (три) календарных дня"),
+        ("21", "21 (двадцать один) календарный день"),
+    ],
+)
+def test_days_in_words_agree_with_the_number(days, expected):
+    t = _by_code("unpaid_leave")
+    text = " ".join(render_text(t["text_template"], {"date_from": "2026-12-01", "days": days},
+                                t["body_schema"]))
+    assert f"сроком на {expected} с " in text
+
+
+def test_days_in_words_gap_keeps_both_blanks():
+    t = _by_code("unpaid_leave")
+    text = " ".join(render_text(t["text_template"], {}, t["body_schema"]))
+    assert f"сроком на {GAP} ({GAP}) календарных дней с {GAP} года." in text
 
 
 def test_unknown_placeholder_becomes_a_gap_not_a_crash():

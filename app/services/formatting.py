@@ -227,6 +227,18 @@ def _text_value(value, field_type: str | None, forms: str | None) -> str:
     if forms == "words":
         return amount_text(value)
 
+    # «{days:words:календарный день|…}» — число цифрами и прописью, как на
+    # бланке «сроком на ___ (прописью) календарных дней».
+    in_words = bool(forms) and forms.startswith("words:")
+    if in_words:
+        forms = forms.removeprefix("words:")
+        if _is_empty(value):
+            return f"{GAP} ({GAP}) {forms.split('|')[-1]}"
+        n = _as_amount(value)
+        if n is None:
+            return f"{value} {forms.split('|')[-1]}"
+        return f"{_as_number(n)} ({number_in_words(n)}) {_plural(n, forms.split('|'))}"
+
     if _is_empty(value):
         # Слово при числе остаётся и у пропуска: «сроком на ________
         # календарных дней», как на бумажном бланке, а не «сроком на ________.»
@@ -262,7 +274,8 @@ def render_text(text_template: str, body: dict | None, schema: dict | None) -> l
 
     Подстановка `{имя_поля}`; для числа можно указать формы слова —
     `{days:календарный день|календарных дня|календарных дней}`, иначе в
-    документе выходит «21 календарных дней». `{amount:words}` — сумма в
+    документе выходит «21 календарных дней»; `{days:words:день|дня|дней}` —
+    то же цифрами и прописью: «14 (четырнадцать) дней». `{amount:words}` — сумма в
     тенге цифрами и прописью. Незаполненное поле, как и поле,
     которого нет в схеме, становится пропуском — текст не ломается, а пробел
     виден на листе.
